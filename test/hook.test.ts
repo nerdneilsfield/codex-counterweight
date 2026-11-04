@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseProjectConfig } from "../src/core/config.js";
-import { childEnv, HOOK, runHook as runHookIn, writeConfig as writeConfigFile, type Sandbox } from "./support.js";
+import { alive, childEnv, HOOK, runHook as runHookIn, until, writeConfig as writeConfigFile, type Sandbox } from "./support.js";
 
 let repo: string;
 let sandbox: Sandbox;
@@ -163,19 +163,6 @@ describe("PostModelRequest", () => {
 });
 
 describe("process groups", () => {
-  const alive = (pid: number) => {
-    try {
-      process.kill(pid, 0);
-      return !/^\d+ \(.*\) Z/.test(readFileSync(`/proc/${pid}/stat`, "utf8"));
-    } catch {
-      return false;
-    }
-  };
-  const until = async (done: () => boolean, ms: number) => {
-    const end = Date.now() + ms;
-    while (!done() && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
-  };
-
   it("kills the check when the hook's process group is SIGKILLed", async () => {
     const pidFile = path.join(repo, "sleep.pid");
     await writeConfig(`version = 1\n[check]\ncmd = ["sh", "-c", "sleep 300 & echo $! > ${pidFile}; wait"]\n`);

@@ -43,6 +43,7 @@ var GROUP_POLL_MS = 50;
 async function runProcess(options) {
   const stdout = await (0, import_promises.open)(options.stdoutPath, "wx");
   const stderr = await (0, import_promises.open)(options.stderrPath, "wx");
+  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises.open)(options.stdinPath, "r");
   const abort = linkAbort(options.signal, options.timeoutMs);
   let child;
   let watch;
@@ -53,7 +54,7 @@ async function runProcess(options) {
       child = (0, import_node_child_process.spawn)(options.cmd[0], options.cmd.slice(1), {
         cwd: options.cwd,
         detached: true,
-        stdio: ["ignore", stdout.fd, stderr.fd],
+        stdio: [stdin?.fd ?? "ignore", stdout.fd, stderr.fd],
         env: options.env
       });
       watch = watchChild(child);
@@ -66,6 +67,7 @@ async function runProcess(options) {
   } finally {
     await stdout.close();
     await stderr.close();
+    await stdin?.close();
   }
   const stop2 = watch ? await stopGroup(watch, abort) : { exitCode: null, signal: null };
   watchdog?.kill();
@@ -8833,7 +8835,11 @@ function isProtected(relative, patterns) {
 }
 
 // src/roles/prompts.ts
-function sessionSection() {
+var REVIEW_PARAGRAPH = `When a chunk of the change is done, call cw_review and cw_over_review with the request and the diff. Skip both when the role is not configured. They only report; they do not block the end check. If one replies with ASK, answer its questions inside the request and call it again.`;
+var CHRONICLE_PARAGRAPH = `After a stage result lands (a commit, a decision, a finished sub-agent task), report it to cw_chronicle in a few sentences with dates and commit ids. Pass on what sub-agents found. If it replies with ASK, answer the questions and report again. Skip it when the role is not configured.`;
+var FORCED_REVIEW = `Counterweight runs cw_review and cw_over_review itself when you finish a turn. Do not call them yourself. If it hands you their findings, fix what is wrong or say why it is not.`;
+var FORCED_CHRONICLE = `Counterweight reports each finished turn to the historian itself. Call cw_chronicle only for a stage result it cannot see, such as a decision or a sub-agent finding.`;
+function sessionSection(auto) {
   return `You are a sharp INTJ engineer. You know software, research, and how systems actually fail. Talk like someone worth arguing with: adult, precise, interested. Not support, not a manual, not a teacher, not a parent, not an acceptance board.
 
 Write natural Chinese. Mix long and short sentences. Break paragraphs where the thought breaks. Use a list only when the items are genuinely parallel. Never stack headings, and never write the whole answer as bullets.
@@ -8851,6 +8857,10 @@ Stay inside the request. Deliver only what was asked. Do not lecture, soothe, or
 Do not negate a position nobody holds and then state your own. Do not spend a paragraph on a point and take it back in the next sentence. A limit is either real, in which case say once what the conclusion covers, or it is not, in which case leave it out. Do not write "\u8FD9\u5E76\u4E0D\u610F\u5473\u7740", "\u9700\u8981\u8BF4\u660E\u7684\u662F", or "\u503C\u5F97\u6CE8\u610F\u7684\u662F" unless that sentence changes the conclusion.
 
 Do not design a gate, a stage review, or a definition of done unless the user asked for one.
+
+${auto.review ? FORCED_REVIEW : REVIEW_PARAGRAPH}
+
+${auto.chronicle ? FORCED_CHRONICLE : CHRONICLE_PARAGRAPH}
 
 Stop when the current question is answered. Do not ask whether to continue.`;
 }
@@ -8897,8 +8907,9 @@ async function main() {
 }
 async function sessionStart(root) {
   const notes = [];
+  let project = null;
   try {
-    const project = await loadProjectConfig(root);
+    project = await loadProjectConfig(root);
     for (const item of project?.autoSkipped ?? []) {
       notes.push(`[counterweight] [auto].${item} \u5DF2\u6253\u5F00\u4F46 .cw/codex.toml \u6CA1\u914D\u5BF9\u5E94\u6A21\u578B\uFF0C\u8BE5\u9879\u89C6\u4E3A\u5173\u95ED`);
     }
@@ -8909,7 +8920,7 @@ async function sessionStart(root) {
   const output = {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: `${sessionSection()}
+      additionalContext: `${sessionSection(project?.auto ?? { review: false, chronicle: false })}
 
 Counterweight ${await pluginVersion()} active`
     }

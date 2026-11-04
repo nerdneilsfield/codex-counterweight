@@ -60,8 +60,9 @@ async function main(): Promise<void> {
 
 async function sessionStart(root: string): Promise<Output> {
   const notes: string[] = [];
+  let project: ProjectConfig | null = null;
   try {
-    const project = await loadProjectConfig(root);
+    project = await loadProjectConfig(root);
     for (const item of project?.autoSkipped ?? []) {
       notes.push(`[counterweight] [auto].${item} 已打开但 .cw/codex.toml 没配对应模型，该项视为关闭`);
     }
@@ -72,7 +73,7 @@ async function sessionStart(root: string): Promise<Output> {
   const output: Record<string, unknown> = {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: `${sessionSection()}\n\nCounterweight ${await pluginVersion()} active`,
+      additionalContext: `${sessionSection(project?.auto ?? { review: false, chronicle: false })}\n\nCounterweight ${await pluginVersion()} active`,
     },
   };
   if (notes.length > 0) output.systemMessage = notes.join("\n");

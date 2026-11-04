@@ -70,10 +70,13 @@ export async function runProcess(options: {
   timeoutMs: number;
   stdoutPath: string;
   stderrPath: string;
+  /** 作为子进程 stdin 的文件；不传则 stdin 为空。 */
+  stdinPath?: string;
   signal?: AbortSignal;
 }): Promise<ProcessRun> {
   const stdout = await open(options.stdoutPath, "wx");
   const stderr = await open(options.stderrPath, "wx");
+  const stdin = options.stdinPath === undefined ? null : await open(options.stdinPath, "r");
   const abort = linkAbort(options.signal, options.timeoutMs);
   let child: ChildProcess | undefined;
   let watch: ChildWatch | undefined;
@@ -84,7 +87,7 @@ export async function runProcess(options: {
       child = spawn(options.cmd[0]!, options.cmd.slice(1), {
         cwd: options.cwd,
         detached: true,
-        stdio: ["ignore", stdout.fd, stderr.fd],
+        stdio: [stdin?.fd ?? "ignore", stdout.fd, stderr.fd],
         env: options.env,
       });
       watch = watchChild(child);
@@ -97,6 +100,7 @@ export async function runProcess(options: {
   } finally {
     await stdout.close();
     await stderr.close();
+    await stdin?.close();
   }
   const stop = watch ? await stopGroup(watch, abort) : { exitCode: null, signal: null };
   // Kill the watchdog before the pgid can be reused by an unrelated group.
