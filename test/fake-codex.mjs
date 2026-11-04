@@ -28,6 +28,7 @@ if (behavior.mode === "hang") setInterval(() => {}, 1000);
 else {
   setTimeout(() => {
     emit({ type: "item.completed", item: { id: "i1", type: "agent_message", text: behavior.answer } });
+    if (behavior.failure) emit({ type: "turn.failed", error: { message: behavior.failure } });
     if (behavior.mode !== "noturn") emit({ type: "turn.completed", usage });
     child.kill();
     process.exit(0);

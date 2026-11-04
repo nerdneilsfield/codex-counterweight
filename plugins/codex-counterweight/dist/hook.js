@@ -9150,7 +9150,11 @@ async function runRole(request) {
       if (outcome.cancelled) return failure("\u5DF2\u88AB\u53D6\u6D88");
       if (outcome.timedOut) return failure("\u8D85\u65F6\uFF0C\u5B50\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62");
       if (outcome.runnerError !== null) return failure(`\u65E0\u6CD5\u542F\u52A8 codex\uFF1A${outcome.runnerError}`);
-      if (!events.completed) return failure("\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u6CA1\u6709 turn.completed\uFF09");
+      if (!events.completed) {
+        const stderr = await (0, import_promises8.readFile)(import_node_path8.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
+        const detail = events.failure ?? stderr.trim().split("\n").pop()?.slice(0, 300) ?? "";
+        return failure(`\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u9000\u51FA\u7801 ${outcome.exitCode}${detail === "" ? "" : `\uFF1A${detail}`}\uFF09`);
+      }
       if (events.answer === null) return failure("\u6CA1\u6709\u6700\u7EC8\u56DE\u7B54");
       if (events.answer.trim() === "") return failure("\u8FD4\u56DE\u7A7A\u56DE\u7B54");
       return { answer: events.answer, error: null, usage: events.usage, timedOut: false, cancelled: false };
@@ -9165,6 +9169,7 @@ function parseEvents(stdout) {
   const usage = [];
   let answer = null;
   let completed = false;
+  let failure = null;
   for (const line of stdout.split("\n")) {
     if (line.trim() === "") continue;
     let event;
@@ -9176,6 +9181,9 @@ function parseEvents(stdout) {
     if (event === null || typeof event !== "object") continue;
     if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
       answer = event.item.text;
+    } else if (event.type === "turn.failed" || event.type === "error") {
+      const reason = event.error?.message ?? event.message;
+      if (typeof reason === "string") failure = reason;
     } else if (event.type === "turn.completed") {
       completed = true;
       const number = (field) => typeof field === "number" && Number.isFinite(field) ? field : 0;
@@ -9188,7 +9196,7 @@ function parseEvents(stdout) {
       });
     }
   }
-  return { answer, completed, usage };
+  return { answer, completed, failure, usage };
 }
 function textOf2(error) {
   return error instanceof Error ? error.message : "unreadable";

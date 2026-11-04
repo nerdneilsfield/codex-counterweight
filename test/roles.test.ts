@@ -42,10 +42,11 @@ describe("runRole", () => {
   });
 
   it("reports a run that never completed its turn", async () => {
-    await installFakeCodex(sandbox, { default: { mode: "noturn", answer: "half" } });
+    await installFakeCodex(sandbox, { default: { mode: "noturn", answer: "half", failure: "model at capacity" } });
     const run = await runRole(request("review"));
     expect(run.answer).toBeNull();
     expect(run.error).toContain("未正常结束");
+    expect(run.error).toContain("model at capacity");
   });
 
   it("times out, reaps the whole process group, and suggests the next tier", async () => {

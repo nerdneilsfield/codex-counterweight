@@ -103,7 +103,11 @@ export async function runRole(request: RoleRequest): Promise<RoleRun> {
       if (outcome.cancelled) return failure("已被取消");
       if (outcome.timedOut) return failure("超时，子进程组已终止");
       if (outcome.runnerError !== null) return failure(`无法启动 codex：${outcome.runnerError}`);
-      if (!events.completed) return failure("未正常结束（没有 turn.completed）");
+      if (!events.completed) {
+        const stderr = await readFile(path.join(scratch, "stderr.log"), "utf8").catch(() => "");
+        const detail = events.failure ?? stderr.trim().split("\n").pop()?.slice(0, 300) ?? "";
+        return failure(`未正常结束（退出码 ${outcome.exitCode}${detail === "" ? "" : `：${detail}`}）`);
+      }
       if (events.answer === null) return failure("没有最终回答");
       if (events.answer.trim() === "") return failure("返回空回答");
       return { answer: events.answer, error: null, usage: events.usage, timedOut: false, cancelled: false };
@@ -118,6 +122,8 @@ export async function runRole(request: RoleRequest): Promise<RoleRun> {
 interface ParsedEvents {
   answer: string | null;
   completed: boolean;
+  /** `turn.failed` 或顶层 `error` 事件带的原因。 */
+  failure: string | null;
   usage: UsageSample[];
 }
 
@@ -126,9 +132,13 @@ export function parseEvents(stdout: string): ParsedEvents {
   const usage: UsageSample[] = [];
   let answer: string | null = null;
   let completed = false;
+  let failure: string | null = null;
   for (const line of stdout.split("\n")) {
     if (line.trim() === "") continue;
-    let event: { type?: unknown; item?: { type?: unknown; text?: unknown }; usage?: Record<string, unknown> };
+    let event: {
+      type?: unknown; item?: { type?: unknown; text?: unknown }; usage?: Record<string, unknown>;
+      message?: unknown; error?: { message?: unknown };
+    };
     try {
       event = JSON.parse(line);
     } catch {
@@ -137,6 +147,9 @@ export function parseEvents(stdout: string): ParsedEvents {
     if (event === null || typeof event !== "object") continue;
     if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
       answer = event.item.text;
+    } else if (event.type === "turn.failed" || event.type === "error") {
+      const reason = event.error?.message ?? event.message;
+      if (typeof reason === "string") failure = reason;
     } else if (event.type === "turn.completed") {
       completed = true;
       const number = (field: unknown): number => typeof field === "number" && Number.isFinite(field) ? field : 0;
@@ -149,7 +162,7 @@ export function parseEvents(stdout: string): ParsedEvents {
       });
     }
   }
-  return { answer, completed, usage };
+  return { answer, completed, failure, usage };
 }
 
 function textOf(error: unknown): string {
