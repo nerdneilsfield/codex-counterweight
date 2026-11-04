@@ -153,7 +153,7 @@ Without `.cw/project.toml`, the plugin allows every write and does nothing at th
 
 ### End check
 
-The plugin runs the check at the end of every completed turn, including turns that only answer a question, so choose a command with an acceptable duration. Only the exit code decides the result. The command runs from the repository root and does not go through a shell, so `npm test && npm run build` is not a valid single command. Put combined checks in a script.
+The plugin runs the check at the end of every completed turn, including turns that only answer a question, so choose a command with an acceptable duration. Only the exit code decides the result. The command runs from the repository root and does not go through a shell, so `npm test && npm run bundle` is not a valid single command. Put combined checks in a script.
 
 If the check fails, the plugin sends the exit code and up to 80 lines or 16 KiB of each output stream back to the model, then the host continues the turn. Each turn gets one such retry. If the check fails again, the plugin shows the result and stops.
 
@@ -361,7 +361,7 @@ npm run typecheck
 npm test
 ```
 
-`npm test` builds the bundles first. Tests put a fake `codex` or `claude` executable first on `PATH` and drive the OpenCode plugin with a fake context object, so they need no model credentials. The bundles in `plugins/codex-counterweight/dist/`, `plugins/claude-counterweight/dist/`, and `plugins/opencode-counterweight/index.js` are committed because plugin installation does not run `npm install`. Run `npm run build` before you commit a source change.
+`npm test` builds the bundles first. Tests put a fake `codex` or `claude` executable first on `PATH` and drive the OpenCode plugin with a fake context object, so they need no model credentials. The bundles in `plugins/codex-counterweight/dist/`, `plugins/claude-counterweight/dist/`, and `plugins/opencode-counterweight/index.js` are committed because plugin installation does not run `npm install`. Run `npm run bundle` before you commit a source change.
 
 The design and measured Codex behavior are recorded in [`docs/superpowers/specs/2026-11-04-codex-counterweight-design.md`](docs/superpowers/specs/2026-11-04-codex-counterweight-design.md) and [`docs/plans/2026-11-04-v2-roles.md`](docs/plans/2026-11-04-v2-roles.md). The Claude Code and OpenCode design and the measured behavior of both hosts are in [`docs/plans/2026-11-04-claude-opencode.md`](docs/plans/2026-11-04-claude-opencode.md).
 

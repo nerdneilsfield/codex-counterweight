@@ -9274,6 +9274,17 @@ async function endCheck(params) {
       const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
       const started = Date.now();
       const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout }, signal });
+      if (outcome.cancelled) {
+        await recordEvent(root, session, "check", {
+          exit_code: outcome.exitCode,
+          timed_out: false,
+          spawn_error: outcome.runnerError,
+          ms: Date.now() - started,
+          outcome: "cancelled"
+        }).catch(() => {
+        });
+        return { continueWith: null, report: null, attention: false };
+      }
       const passed = checkPassed(outcome);
       const retry = !passed && await params.claim("repair");
       let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final: !passed && !retry });

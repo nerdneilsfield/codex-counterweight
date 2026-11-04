@@ -153,7 +153,7 @@ grep '"event":"check"' .cw/meter.jsonl
 
 ### 结束检查
 
-插件在每个正常结束的回合运行检查，只回答问题的回合也会运行，所以要选耗时可以接受的命令。结果只看退出码。命令在仓库根目录运行，不经过 shell，因此 `npm test && npm run build` 不是一条合法的命令。需要组合多个检查时，把它们写进脚本。
+插件在每个正常结束的回合运行检查，只回答问题的回合也会运行，所以要选耗时可以接受的命令。结果只看退出码。命令在仓库根目录运行，不经过 shell，因此 `npm test && npm run bundle` 不是一条合法的命令。需要组合多个检查时，把它们写进脚本。
 
 检查失败时，插件把退出码和每条输出流最多 80 行或 16 KiB 的内容交回模型，宿主继续这一轮。每轮有一次这样的重试机会。再次失败时，插件显示结果并结束。
 
@@ -361,7 +361,7 @@ npm run typecheck
 npm test
 ```
 
-`npm test` 会先构建产物。测试把假的 `codex` 或 `claude` 可执行文件放在 `PATH` 最前面，并用假的 ctx 对象驱动 OpenCode 插件，不需要模型凭据。`plugins/codex-counterweight/dist/`、`plugins/claude-counterweight/dist/` 和 `plugins/opencode-counterweight/index.js` 下的产物要提交，因为安装插件时不会运行 `npm install`。提交源码改动前先运行 `npm run build`。
+`npm test` 会先构建产物。测试把假的 `codex` 或 `claude` 可执行文件放在 `PATH` 最前面，并用假的 ctx 对象驱动 OpenCode 插件，不需要模型凭据。`plugins/codex-counterweight/dist/`、`plugins/claude-counterweight/dist/` 和 `plugins/opencode-counterweight/index.js` 下的产物要提交，因为安装插件时不会运行 `npm install`。提交源码改动前先运行 `npm run bundle`。
 
 设计和实测的 Codex 行为记录在 [`docs/superpowers/specs/2026-11-04-codex-counterweight-design.md`](docs/superpowers/specs/2026-11-04-codex-counterweight-design.md) 和 [`docs/plans/2026-11-04-v2-roles.md`](docs/plans/2026-11-04-v2-roles.md)。Claude Code 和 OpenCode 的设计，以及两个宿主的实测行为，记录在 [`docs/plans/2026-11-04-claude-opencode.md`](docs/plans/2026-11-04-claude-opencode.md)。
 

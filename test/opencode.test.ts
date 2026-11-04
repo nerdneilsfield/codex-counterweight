@@ -179,6 +179,11 @@ describe("end of turn", () => {
     fake.emit({ type: "session.execution.interrupted", data: { sessionID: "root", reason: "user" } });
     await running;
     expect(fake.synthetic).toEqual([]);
+    expect((await meterLines()).filter((line) => line.event === "check").map((line) => line.detail.outcome)).toEqual(["cancelled"]);
+    // 被取消的检查没有用掉修复额度。
+    await project('version = 1\n[check]\ncmd = ["sh", "-c", "exit 3"]\n');
+    await idle(fake);
+    expect(fake.synthetic).toHaveLength(1);
   });
 
   describe("auto review", () => {
