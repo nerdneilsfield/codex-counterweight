@@ -81,7 +81,7 @@ plugins/codex-counterweight/
 .agents/plugins/marketplace.json
 ```
 
-这个 marketplace 加 `plugins/<name>` 的结构已经实测能安装。
+这个 marketplace 加 `plugins/<name>` 的结构已经实测能安装。`dist/package.json` 声明 `commonjs`，否则仓库根的 `"type": "module"` 会让 Node 按 ESM 加载 CJS 包。
 
 `dist/hook.js` 用 esbuild 打成单文件，依赖全部打进去。插件安装不会运行 `npm install`，所以 `dist/` 必须提交。hook 命令是 `node "$PLUGIN_ROOT/dist/hook.js"`。
 
@@ -127,7 +127,7 @@ matcher 是 `^(startup|clear|compact)$`。实测 `resume` 会再注入一份，�
 
 报告用 pi 版的 `renderCheckReport`，尾部限制不变（每条流 80 行或 16 KiB）。最后一次失败传 `final: true`。
 
-**检查进程不能脱离 hook 的进程组。** pi 版的 `runProcess` 用 `detached: true` 单独建组，Codex 杀 hook 时杀不到它，`SIGKILL` 也让 hook 来不及转发。这里要改写，具体做法留给实现者，验收标准是：对 hook 进程组发 `SIGKILL` 后，检查命令及其子进程全部消失；到达 `check.timeout_s` 时，检查进程组先收 `SIGTERM`，5 秒后收 `SIGKILL`，hook 还能输出结果。
+**检查进程必须随 hook 一起消失。** pi 版的 `runProcess` 用 `detached: true` 单独建组，Codex 杀 hook 时杀不到它，`SIGKILL` 也让 hook 来不及转发。实现保留了这个进程组，另起一个 detached 看门进程，通过管道连着 hook，管道断开就杀掉检查组。验收标准是：对 hook 进程组发 `SIGKILL` 后，检查命令及其子进程全部消失；到达 `check.timeout_s` 时，检查进程组先收 `SIGTERM`，5 秒后收 `SIGKILL`，hook 还能输出结果。
 
 `hooks.json` 里的 `timeout` 是写死的，而 `check.timeout_s` 按项目配置，所以 hook 的 `timeout` 要留足。默认设 3600 秒。`check.timeout_s` 超过 3570 秒时，配置仍然合法（pi 能用的文件这里也必须能用），检查按 3570 秒运行，并在结果里写明实际超时。
 
@@ -189,15 +189,14 @@ codex plugin add codex-counterweight@<marketplace>
 - 兼容：一份 pi 版合法的配置，在这里也合法；已确认的未知字段照样报错。
 - 真实 Codex：手动脚本，用 `$HOME` 下的临时 `CODEX_HOME`，不进 CI。
 
-## 开工前要实测
+## 第一版实测结果（2026-11-04，Codex 0.166.0）
 
-第一版动手前先验证这几项。结果不符时，改设计再继续：
-
-1. `source=compact` 时 `additionalContext` 是否真的重新注入。
-2. ~~`resume` 时提示会不会重复注入~~：会，已用 matcher 排除。
-3. TUI 里 `/hooks` 的信任流程，信任是按插件还是按每个 hook；`statusMessage` 和 `Stop` 的 `systemMessage` 是否显示。后者是用户发现检查没跑的主要办法，不显示就要改设计。
-4. 运行中的 `Stop` hook 被用户中断时，进程组是否被杀。
-5. `Stop` hook 的 `timeout` 有没有上限，3600 秒是否有效。
+- `/compact` 后，`source=compact` 的 hook 在下一次模型请求前运行，提示重新注入。压缩当下不注入。
+- `resume` 会多注入一份，所以 matcher 排除了它。
+- TUI 启动时提示“4 hooks are new or changed”，按每个 hook 计，信任后才运行，不是静默的。静默跳过只发生在 `codex exec`。
+- `Stop` 的 `systemMessage` 和 block 原因在 TUI 里都显示，`statusMessage` 显示在运行状态行。
+- 检查运行时按 Esc 中断，检查进程和看门狗都没有残留。
+- 除 `SessionEnd` 和 `Interrupt` 外，hook 的 `timeout` 没有上限（`normalize_command_hook`），3600 秒有效。
 
 ## 第二版方向
 
@@ -215,7 +214,6 @@ codex plugin add codex-counterweight@<marketplace>
 
 ## 留给实现者
 
-- 检查进程组的具体实现，满足“Stop”一节的验收标准即可。
 - `src/core` 复制后的裁剪和类型调整。
 - esbuild 的具体配置，`dist/` 与源码一致的校验方式。
 - 目录内部的文件拆分。

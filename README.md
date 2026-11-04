@@ -9,7 +9,7 @@ codex plugin marketplace add nerdneilsfield/codex-counterweight
 codex plugin add codex-counterweight@<marketplace>
 ```
 
-装完打开 `/hooks`，确认信任 Counterweight 的 hook。未信任的 hook 会被静默跳过。插件每次更新都要重新确认。
+装完打开 `/hooks`，确认信任 Counterweight 的 hook。TUI 启动时会提示有 hook 待信任；`codex exec` 不提示，未信任的 hook 直接跳过。插件每次更新都要重新确认。
 
 会话里运行 `$cw-setup` 可以检查 hook 是否生效并生成配置。
 
