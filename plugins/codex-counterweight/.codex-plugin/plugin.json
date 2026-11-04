@@ -6,5 +6,6 @@
   "repository": "https://github.com/nerdneilsfield/codex-counterweight",
   "skills": "./skills/",
   "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
   "interface": { "displayName": "Counterweight" }
 }

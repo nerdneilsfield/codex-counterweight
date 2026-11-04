@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "counterweight": {
+      "command": "node",
+      "args": ["./dist/mcp.js"],
+      "cwd": ".",
+      "tool_timeout_sec": 1860,
+      "default_tools_approval_mode": "approve",
+      "env_vars": ["CODEX_HOME", "OPENAI_API_KEY"]
+    }
+  }
+}
