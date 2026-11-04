@@ -60,7 +60,8 @@ codex plugin add codex-counterweight@codex-counterweight
 **Claude Code**
 
 ```text
-/plugin install counterweight --marketplace nerdneilsfield/codex-counterweight
+claude plugin marketplace add nerdneilsfield/codex-counterweight
+claude plugin install counterweight@counterweight
 ```
 
 Claude Code 版插件叫 `counterweight`，因为 Claude Code 保留了以 `claude-` 开头的插件名。想从本地克隆试用，用 `--plugin-dir plugins/claude-counterweight` 启动 Claude Code。

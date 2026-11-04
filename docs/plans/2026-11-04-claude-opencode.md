@@ -141,6 +141,16 @@ type RoleRunner = (request: RoleRequest) => Promise<RoleRun>;
 - [x] T2
 - [x] T3
 - [x] T4
-- [ ] T5
+- [x] T5
 
 恢复方式：看 `git log` 和本节勾选状态，从第一个未完成任务继续。
+
+## 验收记录（2026-11-04）
+
+Claude Code 2.1.318，`claude -p --plugin-dir`，模型 haiku：检查修复、路径保护、`cw_explore`、`cw_chronicle`、自动审查续跑一次、PAUSE、杀进程后无角色残留，全部通过。`CLAUDE_CONFIG_DIR` 隔离下 `marketplace add` 和 `install` 从本地路径成功。
+
+OpenCode 2.2.5，`opencode run --standalone` 和 TUI：检查修复、最终失败转告一次且不循环、路径保护、角色工具、自动审查、PAUSE、Esc 无残留，全部通过。`opencode plugin add` 用 `git+file` 成功；项目配置引用 Git 规格后插件实际加载运行。
+
+验收中修复两处：被取消的检查曾被算作失败并消耗修复额度；`build` 脚本会让 npm 在 Git 安装时跑完整构建，改名为 `bundle`。
+
+未验证：Claude Code TUI 的中断和可见性；Claude Code 从 GitHub 安装；OpenCode 用 `github:` 规格安装（远端尚未包含这些提交）；`--strict-mcp-config` 对 `mcp__*` 工具的实际效果；OpenCode 下 role 子会话的 token 只来自事件，`tokens` 字段为 0。

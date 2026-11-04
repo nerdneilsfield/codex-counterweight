@@ -60,7 +60,8 @@ codex plugin add codex-counterweight@codex-counterweight
 **Claude Code**
 
 ```text
-/plugin install counterweight --marketplace nerdneilsfield/codex-counterweight
+claude plugin marketplace add nerdneilsfield/codex-counterweight
+claude plugin install counterweight@counterweight
 ```
 
 The Claude Code plugin is named `counterweight`, because Claude Code reserves plugin names that start with `claude-`. To try the plugin from a local clone, start Claude Code with `--plugin-dir plugins/claude-counterweight`.
