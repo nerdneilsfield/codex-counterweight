@@ -4,16 +4,19 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { changedFiles, chronicleReport, workingDiff } from "../../core/auto.js";
 import { checkPassed, renderCheckReport, runEndCheck } from "../../core/check.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordEvent, recordUsage } from "../../core/meter.js";
 import { isNotFound, realpathOr, resolveWriteTarget } from "../../core/paths.js";
 import { isProtected } from "../../core/protect.js";
+import { claim, endSession, loadPrompt, savePrompt } from "../../core/turnstate.js";
 import { sessionSection } from "../../roles/prompts.js";
+import { chronicle, reviewMessage, runAndMeter, type RoleContext } from "../../roles/tools.js";
 import { patchPaths } from "./patch.js";
 
-/** hooks.json 给 Stop 的 timeout 是 3600 秒，留 30 秒给 hook 自身收尾。 */
+/** hooks.json 给 Stop 的 timeout 是 7200 秒：检查最多 3570 秒，自动运行最多 3600 秒（每个角色有自己的超时）。 */
 const MAX_CHECK_TIMEOUT_S = 3570;
 
 interface HookInput {
@@ -21,7 +24,9 @@ interface HookInput {
   cwd?: string;
   session_id?: string;
   model?: string;
-  stop_hook_active?: boolean;
+  turn_id?: string;
+  prompt?: string;
+  agent_id?: string;
   tool_input?: { command?: unknown };
   status?: string;
   token_usage?: {
@@ -53,6 +58,10 @@ async function main(): Promise<void> {
     case "SessionStart": output = await sessionStart(root); break;
     case "PreToolUse": output = await preToolUse(root, cwd, input); break;
     case "Stop": output = await stop(root, input); break;
+    case "UserPromptSubmit":
+      await savePrompt(input.session_id ?? "", input.turn_id ?? "", input.prompt ?? "").catch(() => {});
+      break;
+    case "SessionEnd": await endSession(input.session_id ?? "").catch(() => {}); break;
     case "PostModelRequest": await postModelRequest(root, input); break;
   }
   if (output !== null) process.stdout.write(`${JSON.stringify(output)}\n`);
@@ -157,30 +166,85 @@ async function stop(root: string, input: HookInput): Promise<Output> {
   } catch (error) {
     return { systemMessage: `[counterweight] 配置非法，未运行检查：${message(error)}` };
   }
-  const check = project?.check ?? null;
-  if (check === null) return null;
-  try {
-    const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
-    const started = Date.now();
-    const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout } });
-    const passed = checkPassed(outcome);
-    const final = input.stop_hook_active === true;
-    let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final });
-    if (timeout < check.timeout_s) {
-      report += `\n[counterweight] check.timeout_s=${check.timeout_s} 超过上限，实际超时 ${timeout}s`;
+  if (project === null) return null;
+  const session = input.session_id ?? "";
+  const turn = input.turn_id ?? "";
+  const texts: string[] = [];
+  let checkReport: string | null = null;
+  if (project.check !== null) {
+    try {
+      const check = project.check;
+      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
+      const started = Date.now();
+      const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout } });
+      const passed = checkPassed(outcome);
+      // 失败时第一次让模型修，额度用完后如实报告。
+      const retry = !passed && await claim(session, turn, "repair");
+      let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final: !passed && !retry });
+      if (timeout < check.timeout_s) {
+        report += `\n[counterweight] check.timeout_s=${check.timeout_s} 超过上限，实际超时 ${timeout}s`;
+      }
+      // A meter failure must not discard the check's conclusion.
+      await recordEvent(root, session, "check", {
+        exit_code: outcome.exitCode,
+        timed_out: outcome.timedOut,
+        spawn_error: outcome.runnerError,
+        ms: Date.now() - started,
+        outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported",
+      }).catch(() => {});
+      if (retry) return { decision: "block", reason: report };
+      checkReport = report;
+    } catch (error) {
+      checkReport = `[counterweight] 结束检查未能完成，本轮没有得到检查结论：${message(error)}`;
     }
-    // A meter failure must not discard the check's conclusion.
-    await recordEvent(root, input.session_id ?? "", "check", {
-      exit_code: outcome.exitCode,
-      timed_out: outcome.timedOut,
-      spawn_error: outcome.runnerError,
-      ms: Date.now() - started,
-      outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : !final ? "feedback" : "reported",
-    }).catch(() => {});
-    if (passed || final) return { systemMessage: report };
-    return { decision: "block", reason: report };
-  } catch (error) {
-    return { systemMessage: `[counterweight] 结束检查未能完成，本轮没有得到检查结论：${message(error)}` };
+    texts.push(checkReport);
+  }
+  const auto = await runAuto(root, project, session, turn, checkReport);
+  // 审查发现续跑时，检查报告留在 systemMessage，发现作为 reason 交回模型。
+  if (auto.findings !== null) return { decision: "block", reason: auto.findings, systemMessage: checkReport ?? undefined };
+  if (auto.text !== null) texts.push(auto.text);
+  return texts.length === 0 ? null : { systemMessage: texts.join("\n\n") };
+}
+
+/**
+ * 收尾时的自动审查与汇报，只在 `[auto]` 打开时有动作。review 与 over_review 并行，只报告，不决定检查是否通过。
+ * 有发现且本回合还没续跑过：发现作为 `findings` 交回模型续跑一次；额度用完只显示。任何失败都只是不产生文字，
+ * 绝不改变检查结论。
+ */
+async function runAuto(
+  root: string, project: ProjectConfig, session: string, turn: string, checkLine: string | null,
+): Promise<{ text: string | null; findings: string | null }> {
+  const none = { text: null, findings: null };
+  try {
+    if (!project.auto.review && !project.auto.chronicle) return none;
+    const diff = await workingDiff(root);
+    if (diff === null || diff.trim() === "") return none;
+    const ctx: RoleContext = { repo: root, session, project };
+    const signal = new AbortController().signal;
+    if (project.auto.review) {
+      const prompt = await loadPrompt(session, turn);
+      const body = reviewMessage({ request: prompt, diff });
+      const [correct, over] = await Promise.all([
+        runAndMeter(ctx, "review", "cw_review", project.models.review!, body, signal),
+        runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review!, body, signal),
+      ]);
+      const findings = [correct, over]
+        .map((run) => run.answer?.trim() ?? "")
+        .filter((answer) => answer !== "" && answer !== "none" && !answer.startsWith("ASK:"));
+      if (findings.length > 0) {
+        if (await claim(session, turn, "findings")) {
+          return { text: null, findings: `[counterweight] 自动审查有发现，处理或说明为什么不处理：\n\n${findings.join("\n\n")}` };
+        }
+        return { text: `[counterweight] 自动审查（续跑之后）仍有发现，不再续跑：\n\n${findings.join("\n\n")}`, findings: null };
+      }
+    }
+    if (project.auto.chronicle) {
+      const report = chronicleReport(await loadPrompt(session, turn), changedFiles(diff), checkLine);
+      await chronicle(ctx, project.models.historian!, report, signal);
+    }
+    return none;
+  } catch {
+    return none;
   }
 }
 

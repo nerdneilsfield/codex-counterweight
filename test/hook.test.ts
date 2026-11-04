@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseProjectConfig } from "../src/core/config.js";
-import { alive, childEnv, HOOK, runHook as runHookIn, until, writeConfig as writeConfigFile, type Sandbox } from "./support.js";
+import { alive, childEnv, fakeCalls, HOOK, installFakeCodex, runHook as runHookIn, until, writeConfig as writeConfigFile, type Sandbox } from "./support.js";
 
 let repo: string;
 let sandbox: Sandbox;
@@ -63,25 +63,26 @@ describe("PreToolUse", () => {
 });
 
 describe("Stop", () => {
-  const stop = (active: boolean) => runHook({ hook_event_name: "Stop", stop_hook_active: active });
+  const stop = () => runHook({ hook_event_name: "Stop" });
 
   it("blocks on a failing check the first time", async () => {
     await writeConfig('version = 1\n[check]\ncmd = ["sh", "-c", "echo boom; exit 3"]\n');
-    const { out } = await stop(false);
+    const { out } = await stop();
     expect((out as any).decision).toBe("block");
     expect((out as any).reason).toContain("boom");
   });
 
-  it("only reports a failing check when stop_hook_active", async () => {
+  it("only reports a failing check the second time in the same turn", async () => {
     await writeConfig('version = 1\n[check]\ncmd = ["sh", "-c", "exit 3"]\n');
-    const { out } = await stop(true);
+    expect((await stop()).out.decision).toBe("block");
+    const { out } = await stop();
     expect((out as any).decision).toBeUndefined();
     expect((out as any).systemMessage).toContain("退出码 3");
   });
 
   it("reports a passing check as a system message", async () => {
     await writeConfig('version = 1\n[check]\ncmd = ["true"]\n');
-    const { out } = await stop(false);
+    const { out } = await stop();
     expect((out as any).systemMessage).toContain("通过");
     expect((out as any).decision).toBeUndefined();
   });
@@ -145,6 +146,53 @@ describe("codex.toml", () => {
   });
 });
 
+describe("auto review", () => {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+
+  beforeEach(async () => {
+    await writeFile(path.join(repo, "a.txt"), "1\n");
+    git("add", "a.txt");
+    git("commit", "-qm", "init");
+    await writeFile(path.join(repo, "a.txt"), "2\n");
+    await writeConfigFile(repo, "codex.toml", '[models]\nreview = "rv"\nover_review = "ov"\n');
+  });
+
+  const findings = { byModel: { rv: { answer: "WRONG `a.txt:1`\n期望：x\n实际：y" }, ov: { answer: "none" } } };
+
+  it("continues once on findings and passes the user's request to the reviewer", async () => {
+    await writeConfig('version = 1\n[auto]\nreview = true\n');
+    await installFakeCodex(sandbox, findings);
+    await runHook({ hook_event_name: "UserPromptSubmit", prompt: "把 a 改成 2" });
+    const first = await runHook({ hook_event_name: "Stop" });
+    expect(first.out.decision).toBe("block");
+    expect(first.out.reason).toContain("WRONG `a.txt:1`");
+    expect((await fakeCalls(sandbox))[0]!.stdin).toContain("把 a 改成 2");
+    const second = await runHook({ hook_event_name: "Stop" });
+    expect(second.out.decision).toBeUndefined();
+    expect(second.out.systemMessage).toContain("不再续跑");
+  });
+
+  it("does not continue when the reviewers find nothing", async () => {
+    await writeConfig('version = 1\n[auto]\nreview = true\n');
+    await installFakeCodex(sandbox, { default: { answer: "none" } });
+    expect((await runHook({ hook_event_name: "Stop" })).stdout).toBe("");
+  });
+
+  it("keeps the repair and findings allowances separate", async () => {
+    await writeConfig('version = 1\n[check]\ncmd = ["sh", "-c", "echo boom; exit 3"]\n[auto]\nreview = true\n');
+    await installFakeCodex(sandbox, findings);
+    const stops = [];
+    for (let i = 0; i < 3; i += 1) stops.push((await runHook({ hook_event_name: "Stop" })).out);
+    expect(stops.map((out) => out.decision)).toEqual(["block", "block", undefined]);
+    expect(stops[0].reason).toContain("boom");
+    expect(stops[1].reason).toContain("自动审查有发现");
+    expect(stops[1].systemMessage).toContain("退出码 3");
+    // The first Stop returned before any reviewer ran.
+    expect((await fakeCalls(sandbox)).length).toBe(4);
+  }, 30_000);
+});
+
 describe("PostModelRequest", () => {
   it("records input without the cached part", async () => {
     await runHook({
@@ -167,7 +215,7 @@ describe("process groups", () => {
     const pidFile = path.join(repo, "sleep.pid");
     await writeConfig(`version = 1\n[check]\ncmd = ["sh", "-c", "sleep 300 & echo $! > ${pidFile}; wait"]\n`);
     const hook = spawn("node", [HOOK], { detached: true, stdio: ["pipe", "ignore", "ignore"], env: childEnv(sandbox) });
-    hook.stdin.end(JSON.stringify({ cwd: repo, session_id: "s1", hook_event_name: "Stop", stop_hook_active: false }));
+    hook.stdin.end(JSON.stringify({ cwd: repo, session_id: "s1", turn_id: "t1", hook_event_name: "Stop" }));
     let sleepPid = 0;
     await until(() => {
       try { sleepPid = Number(readFileSync(pidFile, "utf8")); } catch { /* not yet */ }
@@ -185,7 +233,7 @@ describe("process groups", () => {
   it("reports a timeout for a check that ignores SIGTERM", async () => {
     await writeConfig(
       'version = 1\n[check]\ntimeout_s = 1\ncmd = ["sh", "-c", "trap \'\' TERM; while :; do sleep 1; done"]\n');
-    const { out } = await runHook({ hook_event_name: "Stop", stop_hook_active: false });
+    const { out } = await runHook({ hook_event_name: "Stop" });
     expect((out as any).decision).toBe("block");
     expect((out as any).reason).toContain("超时");
   }, 30_000);

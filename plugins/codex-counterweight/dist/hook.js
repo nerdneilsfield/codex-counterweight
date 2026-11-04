@@ -27,8 +27,84 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/adapters/codex/hook.ts
-var import_promises6 = require("node:fs/promises");
-var import_node_path6 = __toESM(require("node:path"), 1);
+var import_promises10 = require("node:fs/promises");
+var import_node_path10 = __toESM(require("node:path"), 1);
+
+// src/core/gitstate.ts
+var import_node_child_process = require("node:child_process");
+async function repoToplevel(dir) {
+  const result = await git(dir, ["rev-parse", "--show-toplevel"]);
+  if (result.code !== 0) return null;
+  return result.stdout.trim();
+}
+function git(repo, args) {
+  return new Promise((resolve, reject) => {
+    const child = (0, import_node_child_process.spawn)("git", args, {
+      cwd: repo,
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        GIT_CONFIG_COUNT: "0"
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
+// src/core/auto.ts
+var DIFF_CAP = 8e4;
+async function workingDiff(repo) {
+  const run = async (args) => {
+    try {
+      const result = await git(repo, args);
+      return result.code === 0 ? result.stdout : null;
+    } catch {
+      return null;
+    }
+  };
+  const tracked = await run(["diff", "HEAD", "--no-ext-diff", "--no-color"]);
+  if (tracked === null) return null;
+  const untracked = await run(["ls-files", "--others", "--exclude-standard", "--", ":!.cw"]);
+  const names = untracked === null ? [] : untracked.split("\n").filter((line) => line !== "");
+  const tail = names.length === 0 ? "" : `
+# \u672A\u8DDF\u8E2A\u7684\u65B0\u6587\u4EF6\uFF08\u53EA\u5217\u540D\u5B57\uFF09\uFF1A
+${names.map((name) => `# ${name}`).join("\n")}
+`;
+  const body = `${tracked}${tail}`;
+  if (body.trim() === "") return "";
+  return body.length > DIFF_CAP ? `${body.slice(0, DIFF_CAP)}
+# \u2026\uFF08diff \u8D85\u8FC7 ${DIFF_CAP} \u5B57\u7B26\uFF0C\u5DF2\u622A\u65AD\uFF09
+` : body;
+}
+function chronicleReport(request, files, checkLine) {
+  const list = files.length === 0 ? "\uFF08\u65E0\uFF09" : files.slice(0, 40).join("\n");
+  return `\u4E00\u8F6E\u5DE5\u4F5C\u7ED3\u675F\u3002
+
+\u7528\u6237\u8BF7\u6C42\uFF1A
+${request.trim() === "" ? "\uFF08\u672A\u53D6\u5230\uFF09" : request.slice(0, 2e3)}
+
+\u6539\u52A8\u7684\u6587\u4EF6\uFF1A
+${list}
+${checkLine === null ? "" : `
+\u7ED3\u675F\u68C0\u67E5\uFF1A${checkLine}
+`}
+\u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toISOString()}\u3002\u63D0\u4EA4\u4FE1\u606F\u4E0E\u65E5\u671F\u8BF7\u4EE5\u4ED3\u5E93\u4E3A\u51C6\uFF0C\u4E0D\u8981\u7F16\u9020\u3002`;
+}
+function changedFiles(diff) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const match of diff.matchAll(/^diff --git a\/(.+?) b\/\1$/gm)) seen.add(match[1]);
+  for (const match of diff.matchAll(/^# (?!未跟踪|…)(.+)$/gm)) seen.add(match[1]);
+  return [...seen];
+}
 
 // src/core/check.ts
 var import_promises2 = require("node:fs/promises");
@@ -36,7 +112,7 @@ var import_node_os = require("node:os");
 var import_node_path = __toESM(require("node:path"), 1);
 
 // src/core/process.ts
-var import_node_child_process = require("node:child_process");
+var import_node_child_process2 = require("node:child_process");
 var import_promises = require("node:fs/promises");
 var KILL_GRACE_MS = 5e3;
 var GROUP_POLL_MS = 50;
@@ -51,7 +127,7 @@ async function runProcess(options) {
   let runnerError = null;
   try {
     if (!abort.signal.aborted && options.cmd.length > 0) {
-      child = (0, import_node_child_process.spawn)(options.cmd[0], options.cmd.slice(1), {
+      child = (0, import_node_child_process2.spawn)(options.cmd[0], options.cmd.slice(1), {
         cwd: options.cwd,
         detached: true,
         stdio: [stdin?.fd ?? "ignore", stdout.fd, stderr.fd],
@@ -87,7 +163,7 @@ async function runProcess(options) {
 function startWatchdog(pgid) {
   const script = "process.stdin.resume();process.stdin.on('end',()=>{try{process.kill(-Number(process.argv[1]),'SIGKILL')}catch{}process.exit(0)})";
   try {
-    const watchdog = (0, import_node_child_process.spawn)(process.execPath, ["-e", script, String(pgid)], {
+    const watchdog = (0, import_node_child_process2.spawn)(process.execPath, ["-e", script, String(pgid)], {
       detached: true,
       stdio: ["pipe", "ignore", "ignore"]
     });
@@ -8179,23 +8255,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path7, value) {
-  return { type: "update", path: path7, value };
+function CreateUpdate(path11, value) {
+  return { type: "update", path: path11, value };
 }
-function CreateInsert(path7, value) {
-  return { type: "insert", path: path7, value };
+function CreateInsert(path11, value) {
+  return { type: "insert", path: path11, value };
 }
-function CreateDelete(path7) {
-  return { type: "delete", path: path7 };
+function CreateDelete(path11) {
+  return { type: "delete", path: path11 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path7, left, right) {
+function* FromObject17(path11, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path7, right);
+    return yield CreateUpdate(path11, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -8205,7 +8281,7 @@ function* FromObject17(path7, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path7}/${key}`, right[key]);
+    yield CreateInsert(`${path11}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -8214,52 +8290,52 @@ function* FromObject17(path7, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path7}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path11}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path7}/${key}`);
+    yield CreateDelete(`${path11}/${key}`);
   }
 }
-function* FromArray13(path7, left, right) {
+function* FromArray13(path11, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path7, right);
+    return yield CreateUpdate(path11, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path7}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path11}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path7}/${i}`, right[i]);
+    yield CreateInsert(`${path11}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path7}/${i}`);
+    yield CreateDelete(`${path11}/${i}`);
   }
 }
-function* FromTypedArray2(path7, left, right) {
+function* FromTypedArray2(path11, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path7}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path11}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path7, right);
+    return yield CreateUpdate(path11, right);
   }
 }
-function* FromUnknown(path7, left, right) {
+function* FromUnknown(path11, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path7, right);
+  yield CreateUpdate(path11, right);
 }
-function* FromValue4(path7, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path7, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path7, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path7, left, right) : yield* FromUnknown(path7, left, right);
+function* FromValue4(path11, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path11, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path11, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path11, left, right) : yield* FromUnknown(path11, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8758,36 +8834,6 @@ function normalizeProtectedPath(value) {
   return normalized;
 }
 
-// src/core/gitstate.ts
-var import_node_child_process2 = require("node:child_process");
-async function repoToplevel(dir) {
-  const result = await git(dir, ["rev-parse", "--show-toplevel"]);
-  if (result.code !== 0) return null;
-  return result.stdout.trim();
-}
-function git(repo, args) {
-  return new Promise((resolve, reject) => {
-    const child = (0, import_node_child_process2.spawn)("git", args, {
-      cwd: repo,
-      env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        GIT_CONFIG_COUNT: "0"
-      }
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-
 // src/core/meter.ts
 var import_node_fs = require("node:fs");
 var import_promises5 = require("node:fs/promises");
@@ -8834,7 +8880,77 @@ function isProtected(relative, patterns) {
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
+// src/core/turnstate.ts
+var import_promises6 = require("node:fs/promises");
+var import_node_path6 = __toESM(require("node:path"), 1);
+function sessionDir(session) {
+  const data = process.env.PLUGIN_DATA;
+  if (data === void 0 || data === "") return null;
+  if (session === "" || session.includes("/") || session.includes("\\") || session.includes("..")) return null;
+  return import_node_path6.default.join(data, "sessions", session);
+}
+async function claim(session, turn, name) {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return false;
+    await (0, import_promises6.mkdir)(dir, { recursive: true });
+    const handle = await (0, import_promises6.open)(import_node_path6.default.join(dir, `${turn}.${name}`), "wx");
+    await handle.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function savePrompt(session, turn, prompt) {
+  const dir = sessionDir(session);
+  if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
+  await (0, import_promises6.mkdir)(dir, { recursive: true });
+  await (0, import_promises6.writeFile)(import_node_path6.default.join(dir, `${turn}.prompt`), prompt);
+}
+async function loadPrompt(session, turn) {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null) return "";
+    return await (0, import_promises6.readFile)(import_node_path6.default.join(dir, `${turn}.prompt`), "utf8");
+  } catch {
+    return "";
+  }
+}
+async function endSession(session) {
+  const dir = sessionDir(session);
+  if (dir !== null) await (0, import_promises6.rm)(dir, { recursive: true, force: true });
+}
+
+// src/roles/explorer.md
+var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
+
+// src/roles/historian.md
+var historian_default = "You are the project historian. Read only. You keep one document: the development history of this repository.\n\nInput: the current document (it can be empty) and a report from the main agent. Fold the report into the document. Rewrite the whole document. Keep earlier entries unless the report corrects them. Use read and grep to check a claim when the repository can confirm it. Do not invent a date, a commit id, a number, or a cause. If the report does not give a fact and the repository cannot confirm it, leave it out.\n\nIf you cannot go on, reply with `ASK:` on the first line and your questions after it, and nothing else. Do this when only the main agent can settle the point: a missing date, an unknown cause or decision, or a conflict between the report and the repository. Do not write the document in that case.\n\nOtherwise reply with the full document and nothing else. The first line is a `# ` heading. Entries are in time order, newest last.\n\nLanguage: use the language of the current document. If it is empty, use the language of the report.\n\nThe two style guides below are targets, not limits. Stay as close to them as you can, but never drop a fact to satisfy a rule. Each entry must still carry what happened, when, who or what changed, why (when the report or repository says), and the evidence (commit, file, version). If a rule would force you to cut one of these, break the rule: split the sentence, add a sentence, or use a non-approved word and keep the meaning exact. Technical names, identifiers, and paths stay as they are.\n\nEnglish text follows ASD-STE100 (Simplified Technical English):\n- Use the approved words, each with its approved meaning only. Use one word for one thing.\n- Keep a sentence to 20 words or fewer in a procedure, 25 or fewer in a description.\n- One topic for each sentence. Six sentences or fewer in a paragraph.\n- Use the active voice. Use only the simple past, simple present, and simple future. Use the past for events.\n- Keep the articles (a, an, the). Do not use a gerund as a noun. Do not use a slang word or an idiom.\n\nChinese text follows the Xinhua news-agency dispatch style (\u65B0\u534E\u793E\u7535\u8BAF\u7A3F):\n- Each entry starts with a dateline: `\u65B0\u534E\u793E<\u4ED3\u5E93\u540D>X\u6708X\u65E5\u7535`. The date comes from the report or from the repository. Add the year when the entry is in another year.\n- The lead is one sentence: when, who, what was done, and the result. The rest follows in falling order of importance (\u5012\u91D1\u5B57\u5854).\n- Name the source with \u636E or \u8BF4, for example \u636E\u63D0\u4EA4\u8BB0\u5F55, \u636E\u6C47\u62A5. Give the commit, the version, and the file when you have them.\n- State facts. No praise, no \u91CD\u5927 or \u663E\u8457 type judgment, no exclamation mark, no colloquial or net slang.\n- Short sentences. One matter in a paragraph. Use Arabic numerals.\n- After the lead, add the background, the reason, the method, and the effect in as many short paragraphs as the facts need.\n";
+
+// src/roles/over-review.md
+var over_review_default = 'You decide what in this diff did not earn its place. Read only. Ignore the implementer\'s rationale. Look only at this diff, or at the paths you were given. Do not scan the repository. Do not edit. Do not review correctness.\n\nFor each addition, ask which of these is missing:\n\n- Process: a plan, an extra doc, or a session-only test that landed in the tree.\n- Complexity: an abstraction, dependency, config knob, fallback, retry, cache, or compatibility layer with no current caller, observed failure, or platform constraint.\n- Tests: a test with no independent oracle, or one that will not earn its future maintenance.\n- Knowledge: a comment or doc that repeats what the code or an existing doc already says.\n- Defense: a null check, fallback, retry, or second implementation added for a failure that has not happened and that sits on no trust boundary. A check stays when it guards user input, a process boundary, data loss, or authority.\n\n"Might need it later" is not a reason to keep it.\n\nDo not cut: trust-boundary checks, accessibility behavior, data-loss protection, a published contract, a CI-required check, or a test or compatibility layer the user explicitly asked to keep.\n\nDo not suggest a replacement design, a refactor, a lint rule, or a convention.\n\nIf you cannot judge without a fact only the main agent has, reply with `ASK:` on the first line and the questions after it, and nothing else. Do this when the request is too vague to say what the change was meant to do, or the diff cuts off the context you need and the paths you may read do not hold it. Do not ask what you can find with read or grep. Do not ask for a design choice.\n\nWrite Chinese. One cut per block:\n\nCUT `path:symbol`\n\u5220\uFF1A<what goes>\n\u7559\uFF1A<what stays>\n\u56E0\u4E3A\uFF1A<which of the five is missing>\n\nIf nothing qualifies, reply with exactly `none`.\n';
+
+// src/roles/planner.md
+var planner_default = "You write one fix plan for a coding agent that is about to make its first edit to the repository. You have no tools. You cannot read files or run anything. Your input is the transcript of what the agent has done and seen so far, and the edit it is about to make.\n\nJudge from the transcript only. The agent has finished investigating; do not tell it to investigate again. If the transcript does not hold a fact you need, say so in one line under the plan instead of guessing.\n\nWrite the plan as four short parts, in this order:\n\n\u6839\u56E0\uFF1Awhat is actually wrong, and the evidence in the transcript that shows it.\n\u4F4D\u7F6E\uFF1Awhich files and symbols change, using only paths the transcript shows.\n\u505A\u6CD5\uFF1Ahow each change goes, in terms of behavior and contracts. No function bodies.\n\u7406\u7531\uFF1Awhy this approach over the nearest alternative the transcript makes plausible.\n\nIf the edit the agent is about to make does not match your plan, say which part differs and which one you think is right. The agent may disagree with you; it can see the code and you cannot.\n\nDo not review the agent's earlier work. Do not add steps for tests, docs, or hardening unless the transcript shows a failing check or an explicit requirement for them. Do not propose an abstraction, config, or fallback the transcript gives no reason for.\n\nWrite Chinese. Under 400 characters per part.\n";
+
+// src/roles/research.md
+var research_default = "You take a question the main model could not settle by reading the code in front of it. Read only. You do not implement, edit, or widen the question into a program of work.\n\nName the mechanism, the constraint, and the smallest explanation that accounts for what you actually read. The conclusion is the first paragraph. Evidence follows. Anything you did not read is `\u672A\u6838\u5B9E`. Do not fill the gap.\n\nNo refactor proposal, no roadmap.\n\nWrite Chinese directly, long and short sentences, no heading stack. Stop when the question is answered.\n";
+
+// src/roles/review.md
+var review_default = 'You review correctness. Read only. Your input is the request and the diff. You do not edit.\n\nJudge whether the requested behavior is actually there, whether existing callers still work, and whether the change breaks behavior the diff was not supposed to touch. Also report a weakened security check, accessibility behavior, data-loss guard, or trust boundary.\n\nDo not report missing abstractions, missing tests, missing config, future edge cases, or refactors. Do not propose a fix. "Might fail someday" is not a finding.\n\nIf you cannot judge without a fact only the main agent has, reply with `ASK:` on the first line and the questions after it, and nothing else. Do this when the request is too vague to say what the change was meant to do, or the diff cuts off the context you need and the paths you may read do not hold it. Do not ask what you can find with read or grep. Do not ask for a design choice.\n\nWrite Chinese. One finding per block:\n\nWRONG `path:symbol`\n\u671F\u671B\uFF1A<what the request requires>\n\u5B9E\u9645\uFF1A<what the diff does>\n\nIf nothing is wrong, reply with exactly `none`.\n';
+
 // src/roles/prompts.ts
+var PROMPTS = {
+  explorer: explorer_default,
+  review: review_default,
+  over_review: over_review_default,
+  research: research_default,
+  historian: historian_default,
+  planner: planner_default
+};
+function rolePrompt(role) {
+  return PROMPTS[role];
+}
 var REVIEW_PARAGRAPH = `When a chunk of the change is done, call cw_review and cw_over_review with the request and the diff. Skip both when the role is not configured. They only report; they do not block the end check. If one replies with ASK, answer its questions inside the request and call it again.`;
 var CHRONICLE_PARAGRAPH = `After a stage result lands (a commit, a decision, a finished sub-agent task), report it to cw_chronicle in a few sentences with dates and commit ids. Pass on what sub-agents found. If it replies with ASK, answer the questions and report again. Skip it when the role is not configured.`;
 var FORCED_REVIEW = `Counterweight runs cw_review and cw_over_review itself when you finish a turn. Do not call them yourself. If it hands you their findings, fix what is wrong or say why it is not.`;
@@ -8863,6 +8979,251 @@ ${auto.review ? FORCED_REVIEW : REVIEW_PARAGRAPH}
 ${auto.chronicle ? FORCED_CHRONICLE : CHRONICLE_PARAGRAPH}
 
 Stop when the current question is answered. Do not ask whether to continue.`;
+}
+
+// src/roles/tools.ts
+var import_promises9 = require("node:fs/promises");
+var import_node_path9 = __toESM(require("node:path"), 1);
+
+// src/core/cwfile.ts
+var import_promises7 = require("node:fs/promises");
+var import_node_path7 = __toESM(require("node:path"), 1);
+async function writeCwFile(repo, name, content) {
+  const dir = import_node_path7.default.join(repo, ".cw");
+  await (0, import_promises7.mkdir)(dir, { recursive: true });
+  const stat = await (0, import_promises7.lstat)(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
+  }
+  const target = import_node_path7.default.join(dir, name);
+  const temp = `${target}.${process.pid}.tmp`;
+  await (0, import_promises7.writeFile)(temp, content);
+  await (0, import_promises7.rename)(temp, target);
+  return target;
+}
+
+// src/roles/run.ts
+var import_promises8 = require("node:fs/promises");
+var import_node_os2 = require("node:os");
+var import_node_path8 = __toESM(require("node:path"), 1);
+var ROLE_TIMEOUT_MS = 3e5;
+var RESEARCH_TIMEOUT_MS = 18e5;
+function roleTimeoutMs(role) {
+  return role === "research" ? RESEARCH_TIMEOUT_MS : ROLE_TIMEOUT_MS;
+}
+var MIN_TIMEOUT_S = 300;
+var MAX_TIMEOUT_S = 1800;
+function nextTimeoutS(usedMs) {
+  const used = Math.round(usedMs / 1e3);
+  if (used >= MAX_TIMEOUT_S) return null;
+  return Math.min(MAX_TIMEOUT_S, used * 2);
+}
+function roleArgs(request) {
+  return [
+    "exec",
+    "--json",
+    "--ephemeral",
+    "--skip-git-repo-check",
+    "--disable",
+    "hooks",
+    "--disable",
+    "plugins",
+    "-m",
+    request.model,
+    "-c",
+    `developer_instructions=${JSON.stringify(rolePrompt(request.role))}`,
+    ...request.sandbox === "read-only" ? ["-s", "read-only"] : ["--dangerously-bypass-approvals-and-sandbox"],
+    ...request.role === "planner" ? ["--disable", "shell_tool", "-c", 'web_search="disabled"'] : [],
+    "-"
+  ];
+}
+async function runRole(request) {
+  const scratch = await (0, import_promises8.mkdtemp)(import_node_path8.default.join((0, import_node_os2.tmpdir)(), "cw-role-"));
+  try {
+    const messagePath = import_node_path8.default.join(scratch, "message.md");
+    await (0, import_promises8.writeFile)(messagePath, request.message);
+    const outcome = await runProcess({
+      cwd: request.workRoot,
+      cmd: [request.codex ?? "codex", ...roleArgs(request)],
+      env: { ...process.env },
+      timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
+      stdoutPath: import_node_path8.default.join(scratch, "stdout.jsonl"),
+      stderrPath: import_node_path8.default.join(scratch, "stderr.log"),
+      stdinPath: messagePath,
+      signal: request.signal
+    });
+    try {
+      let stdout = "";
+      try {
+        stdout = await (0, import_promises8.readFile)(import_node_path8.default.join(scratch, "stdout.jsonl"), "utf8");
+      } catch (error) {
+        return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
+      }
+      const events = parseEvents(stdout);
+      const failure = (reason) => ({ answer: null, error: reason, usage: events.usage, timedOut: outcome.timedOut, cancelled: outcome.cancelled });
+      if (outcome.cancelled) return failure("\u5DF2\u88AB\u53D6\u6D88");
+      if (outcome.timedOut) return failure("\u8D85\u65F6\uFF0C\u5B50\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62");
+      if (outcome.runnerError !== null) return failure(`\u65E0\u6CD5\u542F\u52A8 codex\uFF1A${outcome.runnerError}`);
+      if (!events.completed) return failure("\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u6CA1\u6709 turn.completed\uFF09");
+      if (events.answer === null) return failure("\u6CA1\u6709\u6700\u7EC8\u56DE\u7B54");
+      if (events.answer.trim() === "") return failure("\u8FD4\u56DE\u7A7A\u56DE\u7B54");
+      return { answer: events.answer, error: null, usage: events.usage, timedOut: false, cancelled: false };
+    } finally {
+      outcome.dispose();
+    }
+  } finally {
+    await (0, import_promises8.rm)(scratch, { recursive: true, force: true });
+  }
+}
+function parseEvents(stdout) {
+  const usage = [];
+  let answer = null;
+  let completed = false;
+  for (const line of stdout.split("\n")) {
+    if (line.trim() === "") continue;
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (event === null || typeof event !== "object") continue;
+    if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
+      answer = event.item.text;
+    } else if (event.type === "turn.completed") {
+      completed = true;
+      const number = (field) => typeof field === "number" && Number.isFinite(field) ? field : 0;
+      const cached = number(event.usage?.cached_input_tokens);
+      usage.push({
+        input: number(event.usage?.input_tokens) - cached,
+        output: number(event.usage?.output_tokens),
+        cacheRead: cached,
+        cacheWrite: number(event.usage?.cache_write_input_tokens)
+      });
+    }
+  }
+  return { answer, completed, usage };
+}
+function textOf(error) {
+  return error instanceof Error ? error.message : "unreadable";
+}
+
+// src/roles/tools.ts
+function timeoutAdvice(tool, usedMs) {
+  const next = nextTimeoutS(usedMs);
+  return next === null ? `\u5DF2\u7ECF\u7528\u6EE1 ${MAX_TIMEOUT_S} \u79D2\u4E0A\u9650\uFF0C\u518D\u52A0\u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\uFF08\u5206\u6587\u4EF6\u3001\u5206\u63D0\u4EA4\uFF09\u540E\u518D\u8C03\u7528 ${tool}\u3002` : `\u4E0B\u4E00\u6863\uFF1A\u7528 timeout_s=${next} \u91CD\u65B0\u8C03\u7528 ${tool}\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF0C\u4E0A\u9650 ${MAX_TIMEOUT_S}\uFF09\u3002`;
+}
+var TIMEOUT_DESCRIPTION = `\u672C\u6B21\u8C03\u7528\u7684\u8D85\u65F6\u79D2\u6570\uFF08${MIN_TIMEOUT_S}\u2013${MAX_TIMEOUT_S}\uFF0C\u8D8A\u754C\u4F1A\u88AB\u5939\u4F4F\uFF09\u3002\u6309\u8F93\u5165\u5927\u5C0F\u4F30\uFF1A\u5C0F\u8F93\u5165\u4E0D\u4F20\uFF0C\u7528\u9ED8\u8BA4 ${MIN_TIMEOUT_S}\uFF1B\u660E\u663E\u5F88\u5927\uFF08\u957F diff\u3001\u8DE8\u5F88\u591A\u6587\u4EF6\uFF09\u5C31\u5148\u8BBE\u957F\u4E00\u4E9B\u3002\u8D85\u65F6\u540E\u8FD4\u56DE\u91CC\u4F1A\u7ED9\u4E0B\u4E00\u6863\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF09\uFF0C\u7167\u7740\u91CD\u8BD5\uFF1B\u5DF2\u5230 ${MAX_TIMEOUT_S} \u8FD8\u8D85\u65F6\u5C31\u62C6\u5C0F\u8F93\u5165\uFF0C\u522B\u518D\u52A0\u3002`;
+var HISTORY_FILE = "HISTORY.md";
+function reviewMessage(params) {
+  return `\u8981\u6C42\uFF1A
+${params.request}
+
+diff\uFF1A
+${params.diff}
+`;
+}
+async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
+  const { repo, session } = ctx;
+  const started = Date.now();
+  const configured = ctx.project.timeouts[role];
+  const timeoutMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
+  const run = await runRole({
+    role,
+    workRoot: repo,
+    model,
+    sandbox: ctx.project.sandbox,
+    message: message2,
+    signal,
+    codex: ctx.codex,
+    timeoutMs
+  });
+  let spent = 0;
+  let meterError = null;
+  for (const sample of run.usage) {
+    try {
+      await recordUsage(repo, {
+        time: (/* @__PURE__ */ new Date()).toISOString(),
+        session,
+        model,
+        input: sample.input,
+        output: sample.output,
+        cache_read: sample.cacheRead,
+        cache_write: sample.cacheWrite,
+        cost_total: null
+      });
+    } catch (error) {
+      meterError ??= error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF";
+    }
+    spent += sample.input + sample.output + sample.cacheRead + sample.cacheWrite;
+  }
+  const meterNote = meterError === null ? "" : `\uFF1B\u7528\u91CF\u672A\u80FD\u5199\u5165\u8BA1\u91CF\uFF08${meterError}\uFF09`;
+  if (run.error !== null) {
+    await recordEvent(repo, session, role, {
+      outcome: "failed",
+      error: run.error,
+      tokens: spent,
+      ms: Date.now() - started,
+      timed_out: run.timedOut,
+      cancelled: run.cancelled
+    }).catch(() => {
+    });
+    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timeoutAdvice(tool, timeoutMs) : ""}` };
+  }
+  const head = run.answer.trim();
+  const result = head === "none" ? "none" : head.startsWith("ASK:") ? "ask" : "answer";
+  await recordEvent(repo, session, role, {
+    outcome: "answered",
+    result,
+    tokens: spent,
+    ms: Date.now() - started,
+    timed_out: false
+  }).catch(() => {
+  });
+  return {
+    answer: run.answer,
+    text: `[counterweight] ${tool}\uFF08\u6A21\u578B ${model}\uFF0C\u6D88\u8017 ${spent} token${meterNote}\uFF09\uFF1A
+${run.answer}`
+  };
+}
+async function readHistory(repo) {
+  try {
+    return await (0, import_promises9.readFile)(import_node_path9.default.join(repo, ".cw", HISTORY_FILE), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  }
+}
+async function chronicle(ctx, model, report, signal, askedS) {
+  let current;
+  try {
+    current = await readHistory(ctx.repo);
+  } catch (error) {
+    return `[counterweight] cw_chronicle \u8BFB\u4E0D\u4E86 .cw/${HISTORY_FILE}\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
+  }
+  const message2 = `\u5F53\u524D\u6587\u6863\uFF1A
+${current === "" ? "\uFF08\u7A7A\uFF09" : current}
+
+\u6C47\u62A5\uFF1A
+${report}
+`;
+  const { text: note, answer } = await runAndMeter(ctx, "historian", "cw_chronicle", model, message2, signal, askedS);
+  if (answer === null) return note;
+  const body = answer.trim();
+  if (body.startsWith("ASK:")) return `${note}
+\u53F2\u5B98\u9700\u8981\u4F60\u534F\u8C03\u540E\u518D\u6C47\u62A5\uFF0C\u6587\u6863\u672A\u6539\u52A8\u3002`;
+  if (!body.startsWith("# ")) return `[counterweight] cw_chronicle \u53F2\u5B98\u6CA1\u6709\u8FD4\u56DE\u6574\u4EFD\u6587\u6863\uFF08\u9996\u884C\u4E0D\u662F # \u6807\u9898\uFF09\uFF0C\u6587\u6863\u672A\u6539\u52A8\uFF1A
+${body.slice(0, 200)}`;
+  try {
+    if (await readHistory(ctx.repo) !== current) {
+      return `[counterweight] cw_chronicle \u6587\u6863\u5728\u6B64\u671F\u95F4\u88AB\u6539\u52A8\uFF0C\u672A\u5199\u5165\uFF0C\u8BF7\u91CD\u65B0\u6C47\u62A5\u3002`;
+    }
+    await writeCwFile(ctx.repo, HISTORY_FILE, `${body}
+`);
+  } catch (error) {
+    return `[counterweight] cw_chronicle \u5199\u5165\u5931\u8D25\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
+  }
+  return `[counterweight] cw_chronicle \u5DF2\u66F4\u65B0 .cw/${HISTORY_FILE}\u3002`;
 }
 
 // src/adapters/codex/patch.ts
@@ -8898,6 +9259,14 @@ async function main() {
     case "Stop":
       output = await stop(root, input);
       break;
+    case "UserPromptSubmit":
+      await savePrompt(input.session_id ?? "", input.turn_id ?? "", input.prompt ?? "").catch(() => {
+      });
+      break;
+    case "SessionEnd":
+      await endSession(input.session_id ?? "").catch(() => {
+      });
+      break;
     case "PostModelRequest":
       await postModelRequest(root, input);
       break;
@@ -8930,8 +9299,8 @@ Counterweight ${await pluginVersion()} active`
 }
 async function pluginVersion() {
   try {
-    const manifest = JSON.parse(await (0, import_promises6.readFile)(
-      import_node_path6.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
+    const manifest = JSON.parse(await (0, import_promises10.readFile)(
+      import_node_path10.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
       "utf8"
     ));
     return typeof manifest.version === "string" ? manifest.version : "unknown";
@@ -8987,9 +9356,9 @@ async function checkProtectedTarget(root, cwd, patterns, raw) {
   return null;
 }
 function toRepoRelative(repoRoot, cwd, value) {
-  const relative = import_node_path6.default.relative(repoRoot, import_node_path6.default.resolve(cwd, value));
-  if (relative === "" || relative.startsWith("..") || import_node_path6.default.isAbsolute(relative)) return null;
-  return relative.split(import_node_path6.default.sep).join("/");
+  const relative = import_node_path10.default.relative(repoRoot, import_node_path10.default.resolve(cwd, value));
+  if (relative === "" || relative.startsWith("..") || import_node_path10.default.isAbsolute(relative)) return null;
+  return relative.split(import_node_path10.default.sep).join("/");
 }
 async function stop(root, input) {
   let project;
@@ -8998,31 +9367,78 @@ async function stop(root, input) {
   } catch (error) {
     return { systemMessage: `[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message(error)}` };
   }
-  const check = project?.check ?? null;
-  if (check === null) return null;
-  try {
-    const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
-    const started = Date.now();
-    const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout } });
-    const passed = checkPassed(outcome);
-    const final = input.stop_hook_active === true;
-    let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final });
-    if (timeout < check.timeout_s) {
-      report += `
+  if (project === null) return null;
+  const session = input.session_id ?? "";
+  const turn = input.turn_id ?? "";
+  const texts = [];
+  let checkReport = null;
+  if (project.check !== null) {
+    try {
+      const check = project.check;
+      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
+      const started = Date.now();
+      const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout } });
+      const passed = checkPassed(outcome);
+      const retry = !passed && await claim(session, turn, "repair");
+      let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final: !passed && !retry });
+      if (timeout < check.timeout_s) {
+        report += `
 [counterweight] check.timeout_s=${check.timeout_s} \u8D85\u8FC7\u4E0A\u9650\uFF0C\u5B9E\u9645\u8D85\u65F6 ${timeout}s`;
+      }
+      await recordEvent(root, session, "check", {
+        exit_code: outcome.exitCode,
+        timed_out: outcome.timedOut,
+        spawn_error: outcome.runnerError,
+        ms: Date.now() - started,
+        outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported"
+      }).catch(() => {
+      });
+      if (retry) return { decision: "block", reason: report };
+      checkReport = report;
+    } catch (error) {
+      checkReport = `[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u5B8C\u6210\uFF0C\u672C\u8F6E\u6CA1\u6709\u5F97\u5230\u68C0\u67E5\u7ED3\u8BBA\uFF1A${message(error)}`;
     }
-    await recordEvent(root, input.session_id ?? "", "check", {
-      exit_code: outcome.exitCode,
-      timed_out: outcome.timedOut,
-      spawn_error: outcome.runnerError,
-      ms: Date.now() - started,
-      outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : !final ? "feedback" : "reported"
-    }).catch(() => {
-    });
-    if (passed || final) return { systemMessage: report };
-    return { decision: "block", reason: report };
-  } catch (error) {
-    return { systemMessage: `[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u5B8C\u6210\uFF0C\u672C\u8F6E\u6CA1\u6709\u5F97\u5230\u68C0\u67E5\u7ED3\u8BBA\uFF1A${message(error)}` };
+    texts.push(checkReport);
+  }
+  const auto = await runAuto(root, project, session, turn, checkReport);
+  if (auto.findings !== null) return { decision: "block", reason: auto.findings, systemMessage: checkReport ?? void 0 };
+  if (auto.text !== null) texts.push(auto.text);
+  return texts.length === 0 ? null : { systemMessage: texts.join("\n\n") };
+}
+async function runAuto(root, project, session, turn, checkLine) {
+  const none = { text: null, findings: null };
+  try {
+    if (!project.auto.review && !project.auto.chronicle) return none;
+    const diff = await workingDiff(root);
+    if (diff === null || diff.trim() === "") return none;
+    const ctx = { repo: root, session, project };
+    const signal = new AbortController().signal;
+    if (project.auto.review) {
+      const prompt = await loadPrompt(session, turn);
+      const body = reviewMessage({ request: prompt, diff });
+      const [correct, over] = await Promise.all([
+        runAndMeter(ctx, "review", "cw_review", project.models.review, body, signal),
+        runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review, body, signal)
+      ]);
+      const findings = [correct, over].map((run) => run.answer?.trim() ?? "").filter((answer) => answer !== "" && answer !== "none" && !answer.startsWith("ASK:"));
+      if (findings.length > 0) {
+        if (await claim(session, turn, "findings")) {
+          return { text: null, findings: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u5904\u7406\u6216\u8BF4\u660E\u4E3A\u4EC0\u4E48\u4E0D\u5904\u7406\uFF1A
+
+${findings.join("\n\n")}` };
+        }
+        return { text: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\uFF08\u7EED\u8DD1\u4E4B\u540E\uFF09\u4ECD\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
+
+${findings.join("\n\n")}`, findings: null };
+      }
+    }
+    if (project.auto.chronicle) {
+      const report = chronicleReport(await loadPrompt(session, turn), changedFiles(diff), checkLine);
+      await chronicle(ctx, project.models.historian, report, signal);
+    }
+    return none;
+  } catch {
+    return none;
   }
 }
 async function postModelRequest(root, input) {

@@ -34,7 +34,7 @@ export function runHook(sandbox: Sandbox, input: Record<string, unknown>): Promi
     child.stdout.on("data", (chunk) => { stdout += chunk; });
     child.once("error", reject);
     child.once("close", () => resolve({ out: stdout === "" ? null : JSON.parse(stdout), stdout }));
-    child.stdin.end(JSON.stringify({ cwd: sandbox.repo, session_id: "s1", ...input }));
+    child.stdin.end(JSON.stringify({ cwd: sandbox.repo, session_id: "s1", turn_id: "t1", ...input }));
   });
 }
 

@@ -19,7 +19,7 @@
           {
             "type": "command",
             "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
-            "timeout": 10
+            "timeout": 1830
           }
         ]
       }
@@ -30,8 +30,8 @@
           {
             "type": "command",
             "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
-            "timeout": 3600,
-            "statusMessage": "运行结束检查"
+            "timeout": 7200,
+            "statusMessage": "运行结束检查和自动审查"
           }
         ]
       }
@@ -43,6 +43,28 @@
             "type": "command",
             "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
             "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
+            "timeout": 3
           }
         ]
       }
