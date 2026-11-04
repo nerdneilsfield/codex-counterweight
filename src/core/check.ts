@@ -14,7 +14,7 @@ import type { CheckConfig } from "./config.js";
 import { runProcess, type ProcessRun } from "./process.js";
 
 /** 每条输出流保留的尾部行数上限 / Maximum trailing lines kept per stream. */
-export const TAIL_LINES = 80;
+const TAIL_LINES = 80;
 /** 每条输出流尾部窗口的字节上限 / Byte cap on each stream's tail window. */
 const TAIL_BYTES = 16 * 1024;
 
@@ -24,7 +24,7 @@ const TAIL_BYTES = 16 * 1024;
  * The facts of one end check: exit code, timeout/cancel flags, launch error,
  * duration, and the tails of both output streams.
  */
-export interface CheckOutcome {
+interface CheckOutcome {
   exitCode: number | null;
   signal: string | null;
   timedOut: boolean;

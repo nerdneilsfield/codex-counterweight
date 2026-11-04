@@ -7,7 +7,7 @@
 import { git } from "./gitstate.js";
 
 /** diff 的字符上限。超出就截断并注明，免得把审查者的上下文塞满。 */
-export const DIFF_CAP = 80_000;
+const DIFF_CAP = 80_000;
 
 /**
  * 工作树相对 HEAD 的改动，含未跟踪文件。不在 git 仓库里、或没有任何提交时返回 null。

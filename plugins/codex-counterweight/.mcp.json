@@ -2,7 +2,7 @@
   "mcpServers": {
     "counterweight": {
       "command": "node",
-      "args": ["./dist/mcp.js"],
+      "args": ["./dist/mcp.cjs"],
       "cwd": ".",
       "tool_timeout_sec": 1860,
       "default_tools_approval_mode": "approve",

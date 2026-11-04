@@ -27,7 +27,7 @@ export interface TranscriptMessage {
 }
 
 /** transcript 的字符预算。超出时丢最早的，保留最近的调查。 */
-export const TRANSCRIPT_BUDGET = 60_000;
+const TRANSCRIPT_BUDGET = 60_000;
 /** 单条工具结果的上限。读大文件的结果通常是噪声。 */
 const TOOL_RESULT_CAP = 2_000;
 

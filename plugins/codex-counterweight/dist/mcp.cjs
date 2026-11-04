@@ -26,369 +26,25 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/adapters/codex/hook.ts
-var import_promises10 = require("node:fs/promises");
-var import_node_path10 = __toESM(require("node:path"), 1);
-
-// src/core/gitstate.ts
-var import_node_child_process = require("node:child_process");
-async function repoToplevel(dir) {
-  const result = await git(dir, ["rev-parse", "--show-toplevel"]);
-  if (result.code !== 0) return null;
-  return result.stdout.trim();
-}
-function git(repo, args) {
-  return new Promise((resolve, reject) => {
-    const child = (0, import_node_child_process.spawn)("git", args, {
-      cwd: repo,
-      env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        GIT_CONFIG_COUNT: "0"
-      }
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-
-// src/core/auto.ts
-var DIFF_CAP = 8e4;
-async function workingDiff(repo) {
-  const run = async (args) => {
-    try {
-      const result = await git(repo, args);
-      return result.code === 0 ? result.stdout : null;
-    } catch {
-      return null;
-    }
-  };
-  const tracked = await run(["diff", "HEAD", "--no-ext-diff", "--no-color"]);
-  if (tracked === null) return null;
-  const untracked = await run(["ls-files", "--others", "--exclude-standard", "--", ":!.cw"]);
-  const names = untracked === null ? [] : untracked.split("\n").filter((line) => line !== "");
-  const tail = names.length === 0 ? "" : `
-# \u672A\u8DDF\u8E2A\u7684\u65B0\u6587\u4EF6\uFF08\u53EA\u5217\u540D\u5B57\uFF09\uFF1A
-${names.map((name) => `# ${name}`).join("\n")}
-`;
-  const body = `${tracked}${tail}`;
-  if (body.trim() === "") return "";
-  return body.length > DIFF_CAP ? `${body.slice(0, DIFF_CAP)}
-# \u2026\uFF08diff \u8D85\u8FC7 ${DIFF_CAP} \u5B57\u7B26\uFF0C\u5DF2\u622A\u65AD\uFF09
-` : body;
-}
-function chronicleReport(request, files, checkLine) {
-  const list = files.length === 0 ? "\uFF08\u65E0\uFF09" : files.slice(0, 40).join("\n");
-  return `\u4E00\u8F6E\u5DE5\u4F5C\u7ED3\u675F\u3002
-
-\u7528\u6237\u8BF7\u6C42\uFF1A
-${request.trim() === "" ? "\uFF08\u672A\u53D6\u5230\uFF09" : request.slice(0, 2e3)}
-
-\u6539\u52A8\u7684\u6587\u4EF6\uFF1A
-${list}
-${checkLine === null ? "" : `
-\u7ED3\u675F\u68C0\u67E5\uFF1A${checkLine}
-`}
-\u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toISOString()}\u3002\u63D0\u4EA4\u4FE1\u606F\u4E0E\u65E5\u671F\u8BF7\u4EE5\u4ED3\u5E93\u4E3A\u51C6\uFF0C\u4E0D\u8981\u7F16\u9020\u3002`;
-}
-function changedFiles(diff) {
-  const seen = /* @__PURE__ */ new Set();
-  for (const match of diff.matchAll(/^diff --git a\/(.+?) b\/\1$/gm)) seen.add(match[1]);
-  for (const match of diff.matchAll(/^# (?!未跟踪|…)(.+)$/gm)) seen.add(match[1]);
-  return [...seen];
-}
-
-// src/core/check.ts
-var import_promises2 = require("node:fs/promises");
-var import_node_os = require("node:os");
-var import_node_path = __toESM(require("node:path"), 1);
-
-// src/core/process.ts
-var import_node_child_process2 = require("node:child_process");
-var import_promises = require("node:fs/promises");
-var KILL_GRACE_MS = 5e3;
-var GROUP_POLL_MS = 50;
-async function runProcess(options) {
-  const stdout = await (0, import_promises.open)(options.stdoutPath, "wx");
-  const stderr = await (0, import_promises.open)(options.stderrPath, "wx");
-  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises.open)(options.stdinPath, "r");
-  const abort = linkAbort(options.signal, options.timeoutMs);
-  let child;
-  let watch;
-  let watchdog;
-  let runnerError = null;
-  try {
-    if (!abort.signal.aborted && options.cmd.length > 0) {
-      child = (0, import_node_child_process2.spawn)(options.cmd[0], options.cmd.slice(1), {
-        cwd: options.cwd,
-        detached: true,
-        stdio: [stdin?.fd ?? "ignore", stdout.fd, stderr.fd],
-        env: options.env
-      });
-      watch = watchChild(child);
-      if (child.pid !== void 0) watchdog = startWatchdog(child.pid);
-    } else if (options.cmd.length === 0) {
-      runnerError = "command empty";
-    }
-  } catch (error) {
-    runnerError = error instanceof Error ? error.message : "failed to start";
-  } finally {
-    await stdout.close();
-    await stderr.close();
-    await stdin?.close();
-  }
-  const stop2 = watch ? await stopGroup(watch, abort) : { exitCode: null, signal: null };
-  watchdog?.kill();
-  abort.cancelTimer();
-  const failure = runnerError ?? watch?.state.spawnError ?? null;
-  return {
-    exitCode: failure === null ? stop2.exitCode : null,
-    signal: stop2.signal,
-    timedOut: abort.timedOut,
-    get cancelled() {
-      return abort.cancelled;
-    },
-    runnerError: failure,
-    dispose: () => abort.dispose()
-  };
-}
-function startWatchdog(pgid) {
-  const script = "process.stdin.resume();process.stdin.on('end',()=>{try{process.kill(-Number(process.argv[1]),'SIGKILL')}catch{}process.exit(0)})";
-  try {
-    const watchdog = (0, import_node_child_process2.spawn)(process.execPath, ["-e", script, String(pgid)], {
-      detached: true,
-      stdio: ["pipe", "ignore", "ignore"]
-    });
-    watchdog.on("error", () => {
-    });
-    watchdog.stdin?.on("error", () => {
-    });
-    watchdog.unref();
-    return watchdog;
-  } catch {
-    return void 0;
-  }
-}
-function linkAbort(parent, timeoutMs) {
-  const controller = new AbortController();
-  const state = { cancelled: parent?.aborted === true, timedOut: false };
-  const onParent = () => {
-    state.cancelled = true;
-    controller.abort();
-  };
-  if (parent) {
-    if (parent.aborted) controller.abort();
-    else parent.addEventListener("abort", onParent, { once: true });
-  }
-  const timer = setTimeout(() => {
-    state.timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  return {
-    signal: controller.signal,
-    get cancelled() {
-      return state.cancelled;
-    },
-    get timedOut() {
-      return state.timedOut;
-    },
-    cancelTimer() {
-      clearTimeout(timer);
-    },
-    dispose() {
-      clearTimeout(timer);
-      parent?.removeEventListener("abort", onParent);
-    }
-  };
-}
-function watchChild(child) {
-  const state = {
-    exited: false,
-    code: null,
-    signal: null,
-    spawned: false,
-    spawnError: null
-  };
-  let resolveLeader;
-  const leader = new Promise((resolve) => {
-    resolveLeader = resolve;
-  });
-  child.once("spawn", () => {
-    state.spawned = true;
-    resolveLeader(child.pid);
-  });
-  child.once("error", (error) => {
-    if (!state.spawned) state.spawnError = error.message;
-    resolveLeader(child.pid);
-  });
-  child.once("exit", (code, signal) => {
-    state.exited = true;
-    state.code = code;
-    state.signal = signal;
-    resolveLeader(child.pid);
-  });
-  return { leader, state };
-}
-async function stopGroup(watch, abort) {
-  const leader = await watch.leader;
-  if (leader === void 0) return { exitCode: watch.state.code ?? 1, signal: watch.state.signal };
-  let termSent = false;
-  let killSent = false;
-  let killAt = 0;
-  const arm = () => {
-    if (termSent) return;
-    termSent = true;
-    killAt = Date.now() + KILL_GRACE_MS;
-    signalGroup(leader, "SIGTERM");
-  };
-  if (abort.signal.aborted) arm();
-  else abort.signal.addEventListener("abort", arm, { once: true });
-  while (!watch.state.exited || groupAlive(leader)) {
-    if (abort.signal.aborted) arm();
-    if (termSent && !killSent && Date.now() >= killAt) {
-      killSent = true;
-      signalGroup(leader, "SIGKILL");
-    }
-    await delay(GROUP_POLL_MS);
-  }
-  abort.signal.removeEventListener("abort", arm);
-  return { exitCode: watch.state.code, signal: watch.state.signal };
-}
-function signalGroup(pid, signal) {
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
-    if (code !== "ESRCH" && code !== "EPERM") throw error;
-  }
-}
-function groupAlive(pid) {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
-    if (code === "ESRCH") return false;
-    if (code === "EPERM") return true;
-    throw error;
-  }
-}
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// src/core/check.ts
-var TAIL_LINES = 80;
-var TAIL_BYTES = 16 * 1024;
-async function runEndCheck(request) {
-  const directory = await (0, import_promises2.mkdtemp)(import_node_path.default.join((0, import_node_os.tmpdir)(), "cw-check-"));
-  const stdoutPath = import_node_path.default.join(directory, "stdout.log");
-  const stderrPath = import_node_path.default.join(directory, "stderr.log");
-  const started = Date.now();
-  let run = null;
-  try {
-    run = await runProcess({
-      cwd: request.repo,
-      cmd: request.check.cmd,
-      env: { ...process.env, ...request.check.env },
-      timeoutMs: request.check.timeout_s * 1e3,
-      stdoutPath,
-      stderrPath,
-      signal: request.signal
-    });
-    const stdout = await readTail(stdoutPath);
-    const stderr = await readTail(stderrPath);
-    return {
-      exitCode: run.exitCode,
-      signal: run.signal,
-      timedOut: run.timedOut,
-      cancelled: run.cancelled,
-      runnerError: run.runnerError,
-      durationMs: Date.now() - started,
-      stdoutTail: stdout.text,
-      stdoutTruncated: stdout.truncated,
-      stderrTail: stderr.text,
-      stderrTruncated: stderr.truncated
-    };
-  } finally {
-    run?.dispose();
-    await (0, import_promises2.rm)(directory, { recursive: true, force: true });
-  }
-}
-function checkPassed(outcome) {
-  return outcome.runnerError === null && !outcome.timedOut && !outcome.cancelled && outcome.exitCode === 0;
-}
-function renderCheckReport(outcome, options) {
-  const seconds = (outcome.durationMs / 1e3).toFixed(1);
-  const lines = [];
-  if (outcome.runnerError !== null) {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u542F\u52A8\uFF1A\`${options.command}\`\uFF08${outcome.runnerError}\uFF09`);
-  } else if (outcome.timedOut) {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u8D85\u65F6\uFF08${seconds}s\uFF09\uFF0C\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62\uFF1A\`${options.command}\``);
-  } else if (outcome.signal !== null) {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u88AB\u4FE1\u53F7 ${outcome.signal} \u7EC8\u6B62\uFF1A\`${options.command}\``);
-  } else if (outcome.exitCode === 0) {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u901A\u8FC7\uFF1A\`${options.command}\` \u9000\u51FA\u7801 0\uFF08${seconds}s\uFF09`);
-  } else {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u901A\u8FC7\uFF1A\`${options.command}\` \u9000\u51FA\u7801 ${outcome.exitCode}\uFF08${seconds}s\uFF09` + (options.final ? "\uFF1B\u4E0D\u518D\u81EA\u52A8\u91CD\u8BD5" : ""));
-  }
-  appendTail(lines, "\u6807\u51C6\u8F93\u51FA", outcome.stdoutTail, outcome.stdoutTruncated);
-  appendTail(lines, "\u6807\u51C6\u9519\u8BEF", outcome.stderrTail, outcome.stderrTruncated);
-  return lines.join("\n");
-}
-function appendTail(lines, label, text2, truncated) {
-  if (text2 === "") return;
-  lines.push(`${label}\uFF08\u5C3E\u90E8${truncated ? "\uFF0C\u5DF2\u622A\u65AD" : ""}\uFF09\uFF1A`);
-  lines.push(text2);
-}
-async function readTail(file) {
-  let chunk;
-  let cut = false;
-  try {
-    const handle = await (0, import_promises2.open)(file, "r");
-    try {
-      const size = (await handle.stat()).size;
-      const readSize = Math.min(size, TAIL_BYTES);
-      chunk = Buffer.alloc(readSize);
-      await handle.read(chunk, 0, readSize, size - readSize);
-      cut = size > readSize;
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return { text: "", truncated: false };
-  }
-  const lines = chunk.toString("utf8").split("\n");
-  if (cut && lines.length > 0) lines.shift();
-  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  const truncatedLines = lines.length > TAIL_LINES;
-  const kept = truncatedLines ? lines.slice(lines.length - TAIL_LINES) : lines;
-  return { text: kept.join("\n").replace(/\s+$/, ""), truncated: cut || truncatedLines };
-}
+// src/adapters/codex/mcp.ts
+var import_node_readline = require("node:readline");
+var import_node_url = require("node:url");
 
 // src/core/config.ts
-var import_promises4 = require("node:fs/promises");
-var import_node_path3 = __toESM(require("node:path"), 1);
+var import_promises2 = require("node:fs/promises");
+var import_node_path2 = __toESM(require("node:path"), 1);
 
 // node_modules/smol-toml/dist/error.js
-function getLineColFromPtr(string, ptr) {
-  let lines = string.slice(0, ptr).split(/\r?\n/);
-  return [lines.length, lines.pop().length + 1];
+function getLineColFromPtr(string2, ptr) {
+  let lines2 = string2.slice(0, ptr).split(/\r?\n/);
+  return [lines2.length, lines2.pop().length + 1];
 }
-function makeCodeBlock(string, line, column) {
-  let lines = string.split(/\r?\n/);
+function makeCodeBlock(string2, line, column) {
+  let lines2 = string2.split(/\r?\n/);
   let codeblock = "";
   let numberLen = (Math.log10(line + 1) | 0) + 1;
   for (let i = line - 1; i <= line + 1; i++) {
-    let l = lines[i - 1];
+    let l = lines2[i - 1];
     if (!l)
       continue;
     codeblock += i.toString().padEnd(numberLen, " ");
@@ -1137,10 +793,10 @@ function parse(toml, options = {}) {
 var HAS_WELLFORMED = !!"".isWellFormed;
 
 // src/core/paths.ts
-var import_promises3 = require("node:fs/promises");
-var import_node_path2 = __toESM(require("node:path"), 1);
+var import_promises = require("node:fs/promises");
+var import_node_path = __toESM(require("node:path"), 1);
 function relativeParts(value) {
-  if (value === "" || import_node_path2.default.isAbsolute(value) || import_node_path2.default.win32.isAbsolute(value)) {
+  if (value === "" || import_node_path.default.isAbsolute(value) || import_node_path.default.win32.isAbsolute(value)) {
     throw new Error(`path: must be repo-relative ${value}`);
   }
   const parts = value.split("/");
@@ -1149,58 +805,9 @@ function relativeParts(value) {
   }
   return parts;
 }
-function pathInside(root, candidate) {
-  const relative = import_node_path2.default.relative(root, candidate);
-  return relative === "" || !relative.startsWith("..") && !import_node_path2.default.isAbsolute(relative);
-}
-async function resolveWriteTarget(root, relative) {
-  const parts = relativeParts(relative);
-  const absolute = import_node_path2.default.join(root, ...parts);
-  let leaf;
-  try {
-    leaf = await (0, import_promises3.lstat)(absolute);
-  } catch (error) {
-    if (!isNotFound(error)) throw error;
-    leaf = null;
-  }
-  if (leaf !== null) {
-    if (leaf.isSymbolicLink()) {
-      try {
-        return await containedRelative(root, absolute, relative);
-      } catch (error) {
-        if (isNotFound(error)) throw new Error(`path: dangling symlink ${relative}`);
-        throw error;
-      }
-    }
-    return await containedRelative(root, absolute, relative);
-  }
-  for (let length = parts.length - 1; length >= 1; length -= 1) {
-    const ancestor = import_node_path2.default.join(root, ...parts.slice(0, length));
-    let stat;
-    try {
-      stat = await (0, import_promises3.lstat)(ancestor);
-    } catch (error) {
-      if (isNotFound(error)) continue;
-      throw error;
-    }
-    if (stat.isSymbolicLink() || stat.isDirectory()) {
-      const realAncestor = await containedRelative(root, ancestor, relative);
-      const rest = parts.slice(length);
-      return realAncestor === "" ? rest.join("/") : [realAncestor, ...rest].join("/");
-    }
-    throw new Error(`path: write target is not a directory ${relative}`);
-  }
-  return relative;
-}
-async function containedRelative(root, candidate, label) {
-  const target = await (0, import_promises3.realpath)(candidate);
-  if (!pathInside(root, target)) throw new Error(`path: symlink escapes repository ${label}`);
-  const relative = import_node_path2.default.relative(root, target);
-  return relative === "" ? "" : relative.split(import_node_path2.default.sep).join("/");
-}
 async function realpathOr(value) {
   try {
-    return await (0, import_promises3.realpath)(value);
+    return await (0, import_promises.realpath)(value);
   } catch {
     return value;
   }
@@ -8255,23 +7862,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path11, value) {
-  return { type: "update", path: path11, value };
+function CreateUpdate(path7, value) {
+  return { type: "update", path: path7, value };
 }
-function CreateInsert(path11, value) {
-  return { type: "insert", path: path11, value };
+function CreateInsert(path7, value) {
+  return { type: "insert", path: path7, value };
 }
-function CreateDelete(path11) {
-  return { type: "delete", path: path11 };
+function CreateDelete(path7) {
+  return { type: "delete", path: path7 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path11, left, right) {
+function* FromObject17(path7, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path7, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -8281,7 +7888,7 @@ function* FromObject17(path11, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path11}/${key}`, right[key]);
+    yield CreateInsert(`${path7}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -8290,52 +7897,52 @@ function* FromObject17(path11, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path11}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path7}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path11}/${key}`);
+    yield CreateDelete(`${path7}/${key}`);
   }
 }
-function* FromArray13(path11, left, right) {
+function* FromArray13(path7, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path7, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path11}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path7}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path11}/${i}`, right[i]);
+    yield CreateInsert(`${path7}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path11}/${i}`);
+    yield CreateDelete(`${path7}/${i}`);
   }
 }
-function* FromTypedArray2(path11, left, right) {
+function* FromTypedArray2(path7, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path11}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path7}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path7, right);
   }
 }
-function* FromUnknown(path11, left, right) {
+function* FromUnknown(path7, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path11, right);
+  yield CreateUpdate(path7, right);
 }
-function* FromValue4(path11, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path11, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path11, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path11, left, right) : yield* FromUnknown(path11, left, right);
+function* FromValue4(path7, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path7, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path7, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path7, left, right) : yield* FromUnknown(path7, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8751,21 +8358,21 @@ var codexSchema = {
 async function loadProjectConfig(repo) {
   const project = await readOptional(repo, "project.toml");
   const codex = await readOptional(repo, "codex.toml");
-  if (project === null && codex === null) return null;
-  return parseProjectConfig(project ?? "version = 1\n", codex ?? "");
+  if (project === null) return null;
+  return parseProjectConfig(project, codex ?? "");
 }
 async function readOptional(repo, name) {
   try {
-    return await (0, import_promises4.readFile)(import_node_path3.default.join(repo, ".cw", name), "utf8");
+    return await (0, import_promises2.readFile)(import_node_path2.default.join(repo, ".cw", name), "utf8");
   } catch (error) {
     if (isNotFound(error)) return null;
     throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
   }
 }
-function parseProjectConfig(text2, codexText = "") {
+function parseProjectConfig(text, codexText = "") {
   let parsed;
   try {
-    parsed = parse(text2);
+    parsed = parse(text);
   } catch (error) {
     throw new Error(`project.toml: ${error instanceof Error ? error.message : "unparsable"}`);
   }
@@ -8834,177 +8441,213 @@ function normalizeProtectedPath(value) {
   return normalized;
 }
 
-// src/core/meter.ts
-var import_node_fs = require("node:fs");
-var import_promises5 = require("node:fs/promises");
-var import_node_path4 = __toESM(require("node:path"), 1);
-var APPEND_FLAGS = import_node_fs.constants.O_APPEND | import_node_fs.constants.O_CREAT | import_node_fs.constants.O_WRONLY | import_node_fs.constants.O_NOFOLLOW;
-async function appendMeterLine(repo, record) {
-  const dir = import_node_path4.default.join(repo, ".cw");
-  await (0, import_promises5.mkdir)(dir, { recursive: true });
-  const stat = await (0, import_promises5.lstat)(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165\u8BA1\u91CF");
-  }
-  const handle = await (0, import_promises5.open)(import_node_path4.default.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
+// src/core/gitstate.ts
+var import_node_child_process = require("node:child_process");
+async function repoToplevel(dir) {
+  const result = await git(dir, ["rev-parse", "--show-toplevel"]);
+  if (result.code !== 0) return null;
+  return result.stdout.trim();
+}
+function git(repo, args) {
+  return new Promise((resolve, reject) => {
+    const child = (0, import_node_child_process.spawn)("git", args, {
+      cwd: repo,
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        GIT_CONFIG_COUNT: "0"
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
+// src/roles/run.ts
+var import_promises4 = require("node:fs/promises");
+var import_node_os = require("node:os");
+var import_node_path3 = __toESM(require("node:path"), 1);
+
+// src/core/process.ts
+var import_node_child_process2 = require("node:child_process");
+var import_promises3 = require("node:fs/promises");
+var KILL_GRACE_MS = 5e3;
+var GROUP_POLL_MS = 50;
+async function runProcess(options) {
+  const stdout = await (0, import_promises3.open)(options.stdoutPath, "wx");
+  const stderr = await (0, import_promises3.open)(options.stderrPath, "wx");
+  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises3.open)(options.stdinPath, "r");
+  const abort = linkAbort(options.signal, options.timeoutMs);
+  let child;
+  let watch;
+  let watchdog;
+  let runnerError = null;
   try {
-    await handle.writeFile(`${JSON.stringify(record)}
-`);
+    if (!abort.signal.aborted && options.cmd.length > 0) {
+      child = (0, import_node_child_process2.spawn)(options.cmd[0], options.cmd.slice(1), {
+        cwd: options.cwd,
+        detached: true,
+        stdio: [stdin?.fd ?? "ignore", stdout.fd, stderr.fd],
+        env: options.env
+      });
+      watch = watchChild(child);
+      if (child.pid !== void 0) watchdog = startWatchdog(child.pid);
+    } else if (options.cmd.length === 0) {
+      runnerError = "command empty";
+    }
+  } catch (error) {
+    runnerError = error instanceof Error ? error.message : "failed to start";
   } finally {
-    await handle.close();
+    await stdout.close();
+    await stderr.close();
+    await stdin?.close();
   }
+  const stop = watch ? await stopGroup(watch, abort) : { exitCode: null, signal: null };
+  watchdog?.kill();
+  abort.cancelTimer();
+  const failure = runnerError ?? watch?.state.spawnError ?? null;
+  return {
+    exitCode: failure === null ? stop.exitCode : null,
+    signal: stop.signal,
+    timedOut: abort.timedOut,
+    get cancelled() {
+      return abort.cancelled;
+    },
+    runnerError: failure,
+    dispose: () => abort.dispose()
+  };
 }
-async function recordUsage(repo, record) {
-  await appendMeterLine(repo, { ...record, kind: "usage" });
-}
-async function recordEvent(repo, session, event, detail = {}) {
+function startWatchdog(pgid) {
+  const script = "process.stdin.resume();process.stdin.on('end',()=>{try{process.kill(-Number(process.argv[1]),'SIGKILL')}catch{}process.exit(0)})";
   try {
-    const record = {
-      kind: "event",
-      time: (/* @__PURE__ */ new Date()).toISOString(),
-      session,
-      event,
-      detail
-    };
-    await appendMeterLine(repo, record);
+    const watchdog = (0, import_node_child_process2.spawn)(process.execPath, ["-e", script, String(pgid)], {
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"]
+    });
+    watchdog.on("error", () => {
+    });
+    watchdog.stdin?.on("error", () => {
+    });
+    watchdog.unref();
+    return watchdog;
   } catch {
+    return void 0;
   }
 }
-
-// src/core/pause.ts
-var SCRATCH_PREFIXES = [".cw/", "tmp/"];
-function isSourceEdit(relative) {
-  if (relative === null) return false;
-  return !SCRATCH_PREFIXES.some((prefix) => relative === prefix.slice(0, -1) || relative.startsWith(prefix));
-}
-var TRANSCRIPT_BUDGET = 6e4;
-var TOOL_RESULT_CAP = 2e3;
-function renderTranscript(messages, budget = TRANSCRIPT_BUDGET) {
-  const blocks = [];
-  for (const message2 of messages) {
-    const block = renderMessage(message2);
-    if (block !== "") blocks.push(block);
+function linkAbort(parent, timeoutMs) {
+  const controller = new AbortController();
+  const state = { cancelled: parent?.aborted === true, timedOut: false };
+  const onParent = () => {
+    state.cancelled = true;
+    controller.abort();
+  };
+  if (parent) {
+    if (parent.aborted) controller.abort();
+    else parent.addEventListener("abort", onParent, { once: true });
   }
-  let total = 0;
-  let start = blocks.length;
-  while (start > 0 && total + blocks[start - 1].length <= budget) {
-    start -= 1;
-    total += blocks[start].length;
-  }
-  const dropped = start;
-  const kept = blocks.slice(start).join("\n\n");
-  return dropped === 0 ? kept : `\uFF08\u66F4\u65E9\u7684 ${dropped} \u6BB5\u8BB0\u5F55\u56E0\u8D85\u51FA\u957F\u5EA6\u9884\u7B97\u88AB\u7701\u7565\uFF09
-
-${kept}`;
-}
-function renderMessage(message2) {
-  switch (message2.role) {
-    case "user":
-      return `[\u7528\u6237]
-${textOf(message2.content)}`;
-    case "assistant":
-      return renderAssistant(message2.content);
-    case "toolResult": {
-      const body = textOf(message2.content);
-      const cut = body.length > TOOL_RESULT_CAP ? `${body.slice(0, TOOL_RESULT_CAP)}
-\u2026\uFF08\u5DF2\u622A\u65AD\uFF09` : body;
-      return `[\u5DE5\u5177\u7ED3\u679C ${message2.toolName ?? ""}]
-${cut}`;
+  const timer = setTimeout(() => {
+    state.timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    get cancelled() {
+      return state.cancelled;
+    },
+    get timedOut() {
+      return state.timedOut;
+    },
+    cancelTimer() {
+      clearTimeout(timer);
+    },
+    dispose() {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", onParent);
     }
-    case "bashExecution":
-      return `[bash] ${message2.command ?? ""}
-${(message2.output ?? "").slice(0, TOOL_RESULT_CAP)}`;
-    case "compactionSummary":
-    case "branchSummary":
-      return `[\u6B64\u524D\u7684\u6458\u8981]
-${message2.summary ?? ""}`;
-    default:
-      return "";
-  }
+  };
 }
-function renderAssistant(content) {
-  if (!Array.isArray(content)) return "";
-  const parts = [];
-  for (const block of content) {
-    if (block === null || typeof block !== "object") continue;
-    const item = block;
-    if (item.type === "text" && typeof item.text === "string" && item.text.trim() !== "") parts.push(item.text);
-    if (item.type === "toolCall" && typeof item.name === "string") {
-      parts.push(`\u8C03\u7528 ${item.name} ${JSON.stringify(item.arguments ?? {}).slice(0, 400)}`);
+function watchChild(child) {
+  const state = {
+    exited: false,
+    code: null,
+    signal: null,
+    spawned: false,
+    spawnError: null
+  };
+  let resolveLeader;
+  const leader = new Promise((resolve) => {
+    resolveLeader = resolve;
+  });
+  child.once("spawn", () => {
+    state.spawned = true;
+    resolveLeader(child.pid);
+  });
+  child.once("error", (error) => {
+    if (!state.spawned) state.spawnError = error.message;
+    resolveLeader(child.pid);
+  });
+  child.once("exit", (code, signal) => {
+    state.exited = true;
+    state.code = code;
+    state.signal = signal;
+    resolveLeader(child.pid);
+  });
+  return { leader, state };
+}
+async function stopGroup(watch, abort) {
+  const leader = await watch.leader;
+  if (leader === void 0) return { exitCode: watch.state.code ?? 1, signal: watch.state.signal };
+  let termSent = false;
+  let killSent = false;
+  let killAt = 0;
+  const arm = () => {
+    if (termSent) return;
+    termSent = true;
+    killAt = Date.now() + KILL_GRACE_MS;
+    signalGroup(leader, "SIGTERM");
+  };
+  if (abort.signal.aborted) arm();
+  else abort.signal.addEventListener("abort", arm, { once: true });
+  while (!watch.state.exited || groupAlive(leader)) {
+    if (abort.signal.aborted) arm();
+    if (termSent && !killSent && Date.now() >= killAt) {
+      killSent = true;
+      signalGroup(leader, "SIGKILL");
     }
+    await delay(GROUP_POLL_MS);
   }
-  return parts.length === 0 ? "" : `[\u52A9\u624B]
-${parts.join("\n")}`;
+  abort.signal.removeEventListener("abort", arm);
+  return { exitCode: watch.state.code, signal: watch.state.signal };
 }
-function textOf(content) {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
-  return content.filter((block) => block !== null && typeof block === "object" && block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n");
-}
-function plannerMessage(transcript, target, tool, input) {
-  return `\u5230\u76EE\u524D\u4E3A\u6B62\u7684\u8BB0\u5F55\uFF1A
-
-${transcript}
-
----
-\u5B83\u6B63\u8981\u505A\u7684\u7B2C\u4E00\u6B21\u6E90\u7801\u7F16\u8F91\uFF1A${tool} ${target}
-${JSON.stringify(input).slice(0, 1500)}
-`;
-}
-function pauseReason(plan) {
-  return `[counterweight] \u8FD9\u662F\u672C\u56DE\u5408\u7B2C\u4E00\u6B21\u6539\u6E90\u7801\uFF0C\u5DF2\u5148\u8BF7 planner \u8BFB\u5B8C\u8C03\u67E5\u5199\u4E86\u4E00\u4EFD\u8BA1\u5212\u3002\u8BA1\u5212\u53EA\u662F\u5EFA\u8BAE\uFF1A\u4F60\u770B\u5F97\u5230\u4EE3\u7801\uFF0C\u5B83\u770B\u4E0D\u5230\u3002\u4E0D\u540C\u610F\u5C31\u8BF4\u660E\u54EA\u91CC\u4E0D\u540C\u610F\uFF0C\u7136\u540E\u7167\u4F60\u7684\u5224\u65AD\u91CD\u65B0\u53D1\u8D77\u8FD9\u6B21\u7F16\u8F91\uFF0C\u8FD9\u7C7B\u62E6\u622A\u672C\u56DE\u5408\u4E0D\u4F1A\u518D\u51FA\u73B0\u3002
-
-${plan}`;
-}
-
-// src/core/protect.ts
-var import_node_path5 = __toESM(require("node:path"), 1);
-var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml"];
-function isProtected(relative, patterns) {
-  const normalized = relative.split(import_node_path5.default.sep).join("/");
-  if (CONFIG_FILES.includes(normalized)) return true;
-  return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
-}
-
-// src/core/turnstate.ts
-var import_promises6 = require("node:fs/promises");
-var import_node_path6 = __toESM(require("node:path"), 1);
-function sessionDir(session) {
-  const data = process.env.PLUGIN_DATA;
-  if (data === void 0 || data === "") return null;
-  if (session === "" || session.includes("/") || session.includes("\\") || session.includes("..")) return null;
-  return import_node_path6.default.join(data, "sessions", session);
-}
-async function claim(session, turn, name) {
+function signalGroup(pid, signal) {
   try {
-    const dir = sessionDir(session);
-    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return false;
-    await (0, import_promises6.mkdir)(dir, { recursive: true });
-    const handle = await (0, import_promises6.open)(import_node_path6.default.join(dir, `${turn}.${name}`), "wx");
-    await handle.close();
+    process.kill(-pid, signal);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : "";
+    if (code !== "ESRCH" && code !== "EPERM") throw error;
+  }
+}
+function groupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : "";
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    throw error;
   }
 }
-async function savePrompt(session, turn, prompt) {
-  const dir = sessionDir(session);
-  if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
-  await (0, import_promises6.mkdir)(dir, { recursive: true });
-  await (0, import_promises6.writeFile)(import_node_path6.default.join(dir, `${turn}.prompt`), prompt);
-}
-async function loadPrompt(session, turn) {
-  try {
-    const dir = sessionDir(session);
-    if (dir === null) return "";
-    return await (0, import_promises6.readFile)(import_node_path6.default.join(dir, `${turn}.prompt`), "utf8");
-  } catch {
-    return "";
-  }
-}
-async function endSession(session) {
-  const dir = sessionDir(session);
-  if (dir !== null) await (0, import_promises6.rm)(dir, { recursive: true, force: true });
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // src/roles/explorer.md
@@ -9037,61 +8680,8 @@ var PROMPTS = {
 function rolePrompt(role) {
   return PROMPTS[role];
 }
-var REVIEW_PARAGRAPH = `When a chunk of the change is done, call cw_review and cw_over_review with the request and the diff. Skip both when the role is not configured. They only report; they do not block the end check. If one replies with ASK, answer its questions inside the request and call it again.`;
-var CHRONICLE_PARAGRAPH = `After a stage result lands (a commit, a decision, a finished sub-agent task), report it to cw_chronicle in a few sentences with dates and commit ids. Pass on what sub-agents found. If it replies with ASK, answer the questions and report again. Skip it when the role is not configured.`;
-var FORCED_REVIEW = `Counterweight runs cw_review and cw_over_review itself when you finish a turn. Do not call them yourself. If it hands you their findings, fix what is wrong or say why it is not.`;
-var FORCED_CHRONICLE = `Counterweight reports each finished turn to the historian itself. Call cw_chronicle only for a stage result it cannot see, such as a decision or a sub-agent finding.`;
-function sessionSection(auto) {
-  return `You are a sharp INTJ engineer. You know software, research, and how systems actually fail. Talk like someone worth arguing with: adult, precise, interested. Not support, not a manual, not a teacher, not a parent, not an acceptance board.
-
-Write natural Chinese. Mix long and short sentences. Break paragraphs where the thought breaks. Use a list only when the items are genuinely parallel. Never stack headings, and never write the whole answer as bullets.
-
-Think, then stop.
-
-First principles: name what the user actually needs, the constraint that makes a design necessary, and the smallest thing that satisfies it. Do not add an abstraction, dependency, config knob, fallback, retry, cache, or compatibility layer unless a current requirement, a reachable caller, an observed failure, or a platform constraint demands it. Future use, elegance, and completeness are not constraints. Do not add a branch for a case that has not happened. Do not add a test unless its expected result comes from outside the implementation and it will earn its keep.
-
-Pyramid: the first sentences are the answer. Supporting detail follows only when it changes what the user should do.
-
-If the question is clear, answer it. If one missing constraint would change the shape, scope, or complexity, ask first. At most three questions. After the user answers, give the full answer.
-
-Stay inside the request. Deliver only what was asked. Do not lecture, soothe, or judge the user's intent. No opener, no moral, no call to action. Write the Chinese directly. Do not draft in English and translate.
-
-Do not negate a position nobody holds and then state your own. Do not spend a paragraph on a point and take it back in the next sentence. A limit is either real, in which case say once what the conclusion covers, or it is not, in which case leave it out. Do not write "\u8FD9\u5E76\u4E0D\u610F\u5473\u7740", "\u9700\u8981\u8BF4\u660E\u7684\u662F", or "\u503C\u5F97\u6CE8\u610F\u7684\u662F" unless that sentence changes the conclusion.
-
-Do not design a gate, a stage review, or a definition of done unless the user asked for one.
-
-${auto.review ? FORCED_REVIEW : REVIEW_PARAGRAPH}
-
-${auto.chronicle ? FORCED_CHRONICLE : CHRONICLE_PARAGRAPH}
-
-Stop when the current question is answered. Do not ask whether to continue.`;
-}
-
-// src/roles/tools.ts
-var import_promises9 = require("node:fs/promises");
-var import_node_path9 = __toESM(require("node:path"), 1);
-
-// src/core/cwfile.ts
-var import_promises7 = require("node:fs/promises");
-var import_node_path7 = __toESM(require("node:path"), 1);
-async function writeCwFile(repo, name, content) {
-  const dir = import_node_path7.default.join(repo, ".cw");
-  await (0, import_promises7.mkdir)(dir, { recursive: true });
-  const stat = await (0, import_promises7.lstat)(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
-  }
-  const target = import_node_path7.default.join(dir, name);
-  const temp = `${target}.${process.pid}.tmp`;
-  await (0, import_promises7.writeFile)(temp, content);
-  await (0, import_promises7.rename)(temp, target);
-  return target;
-}
 
 // src/roles/run.ts
-var import_promises8 = require("node:fs/promises");
-var import_node_os2 = require("node:os");
-var import_node_path8 = __toESM(require("node:path"), 1);
 var ROLE_TIMEOUT_MS = 3e5;
 var RESEARCH_TIMEOUT_MS = 18e5;
 function roleTimeoutMs(role) {
@@ -9099,6 +8689,10 @@ function roleTimeoutMs(role) {
 }
 var MIN_TIMEOUT_S = 300;
 var MAX_TIMEOUT_S = 1800;
+function clampTimeoutS(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
+  return Math.min(MAX_TIMEOUT_S, Math.max(MIN_TIMEOUT_S, Math.round(value)));
+}
 function nextTimeoutS(usedMs) {
   const used = Math.round(usedMs / 1e3);
   if (used >= MAX_TIMEOUT_S) return null;
@@ -9124,26 +8718,26 @@ function roleArgs(request) {
   ];
 }
 async function runRole(request) {
-  const scratch = await (0, import_promises8.mkdtemp)(import_node_path8.default.join((0, import_node_os2.tmpdir)(), "cw-role-"));
+  const scratch = await (0, import_promises4.mkdtemp)(import_node_path3.default.join((0, import_node_os.tmpdir)(), "cw-role-"));
   try {
-    const messagePath = import_node_path8.default.join(scratch, "message.md");
-    await (0, import_promises8.writeFile)(messagePath, request.message);
+    const messagePath = import_node_path3.default.join(scratch, "message.md");
+    await (0, import_promises4.writeFile)(messagePath, request.message);
     const outcome = await runProcess({
       cwd: request.workRoot,
-      cmd: [request.codex ?? "codex", ...roleArgs(request)],
+      cmd: ["codex", ...roleArgs(request)],
       env: { ...process.env },
       timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
-      stdoutPath: import_node_path8.default.join(scratch, "stdout.jsonl"),
-      stderrPath: import_node_path8.default.join(scratch, "stderr.log"),
+      stdoutPath: import_node_path3.default.join(scratch, "stdout.jsonl"),
+      stderrPath: import_node_path3.default.join(scratch, "stderr.log"),
       stdinPath: messagePath,
       signal: request.signal
     });
     try {
       let stdout = "";
       try {
-        stdout = await (0, import_promises8.readFile)(import_node_path8.default.join(scratch, "stdout.jsonl"), "utf8");
+        stdout = await (0, import_promises4.readFile)(import_node_path3.default.join(scratch, "stdout.jsonl"), "utf8");
       } catch (error) {
-        return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf2(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
+        return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
       }
       const events = parseEvents(stdout);
       const failure = (reason) => ({ answer: null, error: reason, usage: events.usage, timedOut: outcome.timedOut, cancelled: outcome.cancelled });
@@ -9151,7 +8745,7 @@ async function runRole(request) {
       if (outcome.timedOut) return failure("\u8D85\u65F6\uFF0C\u5B50\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62");
       if (outcome.runnerError !== null) return failure(`\u65E0\u6CD5\u542F\u52A8 codex\uFF1A${outcome.runnerError}`);
       if (!events.completed) {
-        const stderr = await (0, import_promises8.readFile)(import_node_path8.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
+        const stderr = await (0, import_promises4.readFile)(import_node_path3.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
         const detail = events.failure ?? stderr.trim().split("\n").pop()?.slice(0, 300) ?? "";
         return failure(`\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u9000\u51FA\u7801 ${outcome.exitCode}${detail === "" ? "" : `\uFF1A${detail}`}\uFF09`);
       }
@@ -9162,7 +8756,7 @@ async function runRole(request) {
       outcome.dispose();
     }
   } finally {
-    await (0, import_promises8.rm)(scratch, { recursive: true, force: true });
+    await (0, import_promises4.rm)(scratch, { recursive: true, force: true });
   }
 }
 function parseEvents(stdout) {
@@ -9198,8 +8792,104 @@ function parseEvents(stdout) {
   }
   return { answer, completed, failure, usage };
 }
-function textOf2(error) {
+function textOf(error) {
   return error instanceof Error ? error.message : "unreadable";
+}
+
+// src/roles/tools.ts
+var import_promises7 = require("node:fs/promises");
+var import_node_path6 = __toESM(require("node:path"), 1);
+
+// src/core/cwfile.ts
+var import_promises5 = require("node:fs/promises");
+var import_node_path4 = __toESM(require("node:path"), 1);
+async function writeCwFile(repo, name, content) {
+  const dir = import_node_path4.default.join(repo, ".cw");
+  await (0, import_promises5.mkdir)(dir, { recursive: true });
+  const stat = await (0, import_promises5.lstat)(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
+  }
+  const target = import_node_path4.default.join(dir, name);
+  const temp = `${target}.${process.pid}.tmp`;
+  await (0, import_promises5.writeFile)(temp, content);
+  await (0, import_promises5.rename)(temp, target);
+  return target;
+}
+
+// src/core/meter.ts
+var import_node_fs = require("node:fs");
+var import_promises6 = require("node:fs/promises");
+var import_node_path5 = __toESM(require("node:path"), 1);
+var APPEND_FLAGS = import_node_fs.constants.O_APPEND | import_node_fs.constants.O_CREAT | import_node_fs.constants.O_WRONLY | import_node_fs.constants.O_NOFOLLOW;
+async function appendMeterLine(repo, record) {
+  const dir = import_node_path5.default.join(repo, ".cw");
+  await (0, import_promises6.mkdir)(dir, { recursive: true });
+  const stat = await (0, import_promises6.lstat)(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165\u8BA1\u91CF");
+  }
+  const handle2 = await (0, import_promises6.open)(import_node_path5.default.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
+  try {
+    await handle2.writeFile(`${JSON.stringify(record)}
+`);
+  } finally {
+    await handle2.close();
+  }
+}
+async function recordUsage(repo, record) {
+  await appendMeterLine(repo, { ...record, kind: "usage" });
+}
+async function recordEvent(repo, session, event, detail = {}) {
+  try {
+    const record = {
+      kind: "event",
+      time: (/* @__PURE__ */ new Date()).toISOString(),
+      session,
+      event,
+      detail
+    };
+    await appendMeterLine(repo, record);
+  } catch {
+  }
+}
+
+// src/core/router.ts
+var QUESTIONS = {
+  review: "\u8FD9\u6B21\u6539\u52A8\u662F\u5426\u5B58\u5728\u884C\u4E3A\u9519\u8BEF\uFF1A\u903B\u8F91\u9519\u8BEF\u3001\u88AB\u524A\u5F31\u7684\u6821\u9A8C\u6216\u9519\u8BEF\u5904\u7406\u3001\u6CA1\u6709\u540C\u6B65\u66F4\u65B0\u7684\u8C03\u7528\u65B9",
+  over_review: "\u8FD9\u6B21\u6539\u52A8\u662F\u5426\u5305\u542B\u6CA1\u6709\u5F53\u524D\u9700\u6C42\u652F\u6491\u7684\u62BD\u8C61\u3001\u515C\u5E95\u5206\u652F\u3001\u914D\u7F6E\u9879\u3001\u517C\u5BB9\u5C42\u6216\u591A\u4F59\u7684\u6D4B\u8BD5"
+};
+async function gate(router, role, state, signal, random = Math.random) {
+  const started = Date.now();
+  const done = (v) => ({ ...v, ms: Date.now() - started });
+  try {
+    const headers = { "content-type": "application/json" };
+    if (router.api_key_env !== null) {
+      const key = process.env[router.api_key_env];
+      if (key === void 0 || key === "") throw new Error(`\u73AF\u5883\u53D8\u91CF ${router.api_key_env} \u4E3A\u7A7A`);
+      headers.authorization = `Bearer ${key}`;
+    }
+    const timeout = AbortSignal.timeout(router.timeout_ms);
+    const response = await fetch(router.url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: router.model,
+        state,
+        questions: { problem: { type: "noul", instructions: QUESTIONS[role] } }
+      }),
+      signal: signal === void 0 ? timeout : AbortSignal.any([signal, timeout])
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    const p = payload.answers?.problem?.noul;
+    if (typeof p !== "number" || !(p >= 0 && p <= 1)) throw new Error("\u54CD\u5E94\u91CC\u6CA1\u6709 0..1 \u7684 noul");
+    if (p > router.skip_below) return done({ skip: false, p, audited: false, error: null });
+    const audited = random() < router.audit_rate;
+    return done({ skip: !audited, p, audited, error: null });
+  } catch (error) {
+    return done({ skip: false, p: null, audited: false, error: error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF" });
+  }
 }
 
 // src/roles/tools.ts
@@ -9207,8 +8897,69 @@ function timeoutAdvice(tool, usedMs) {
   const next = nextTimeoutS(usedMs);
   return next === null ? `\u5DF2\u7ECF\u7528\u6EE1 ${MAX_TIMEOUT_S} \u79D2\u4E0A\u9650\uFF0C\u518D\u52A0\u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\uFF08\u5206\u6587\u4EF6\u3001\u5206\u63D0\u4EA4\uFF09\u540E\u518D\u8C03\u7528 ${tool}\u3002` : `\u4E0B\u4E00\u6863\uFF1A\u7528 timeout_s=${next} \u91CD\u65B0\u8C03\u7528 ${tool}\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF0C\u4E0A\u9650 ${MAX_TIMEOUT_S}\uFF09\u3002`;
 }
+var ROLES = [
+  {
+    name: "explorer",
+    tool: "cw_explore",
+    description: "\u628A\u4E00\u4E2A\u4EE3\u7801\u95EE\u9898\u4EA4\u7ED9\u53EA\u8BFB\u63A2\u7D22\u8005\u3002\u5B83\u53EA\u80FD\u8BFB\u548C\u641C\uFF0C\u8FD4\u56DE\u5E26\u6765\u6E90\u7684\u7ED3\u8BBA\u3002\u4E0D\u505A\u4FEE\u6539\u3002",
+    input: "question"
+  },
+  {
+    name: "review",
+    tool: "cw_review",
+    description: "\u628A\u8FD9\u6B21\u7684\u8981\u6C42\u548C diff \u4EA4\u7ED9\u53EA\u8BFB\u5BA1\u67E5\u3002\u5B83\u53EA\u62A5\u884C\u4E3A\u9519\u8BEF\u548C\u88AB\u524A\u5F31\u7684\u771F\u5B9E\u8FB9\u754C\uFF0C\u4E0D\u62A5\u7F3A\u6D4B\u8BD5\u3001\u4E0D\u63D0\u91CD\u6784\u3001\u4E0D\u6539\u6587\u4EF6\u3002\u4FE1\u606F\u4E0D\u591F\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u8865\u5145\u5230 request \u540E\u91CD\u65B0\u8C03\u7528\u3002",
+    input: "review"
+  },
+  {
+    name: "over_review",
+    tool: "cw_over_review",
+    description: "\u628A\u8FD9\u6B21\u7684\u8981\u6C42\u548C diff \u4EA4\u7ED9\u53EA\u8BFB\u5BA1\u67E5\u3002\u5B83\u53EA\u62A5\u6CA1\u8D44\u683C\u7559\u4E0B\u7684\u62BD\u8C61\u3001\u515C\u5E95\u3001\u591A\u4F59\u6D4B\u8BD5\u548C\u9632\u5FA1\u6027\u5206\u652F\uFF0C\u4E0D\u8BC4\u5BF9\u9519\u3001\u4E0D\u6539\u6587\u4EF6\u3002\u4FE1\u606F\u4E0D\u591F\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u8865\u5145\u5230 request \u540E\u91CD\u65B0\u8C03\u7528\u3002",
+    input: "review"
+  },
+  {
+    name: "research",
+    tool: "cw_research",
+    description: "\u628A\u4E3B\u6A21\u578B\u8BFB\u4EE3\u7801\u4ECD\u5B9A\u4E0D\u4E0B\u6765\u7684\u95EE\u9898\u4EA4\u7ED9\u53EA\u8BFB\u7814\u7A76\u89D2\u8272\u3002\u7ED3\u8BBA\u5728\u524D\uFF0C\u6CA1\u8BFB\u5230\u7684\u6807\u672A\u6838\u5B9E\u3002\u4E0D\u5B9E\u73B0\u3002",
+    input: "question"
+  },
+  {
+    name: "historian",
+    tool: "cw_chronicle",
+    description: "\u628A\u9636\u6BB5\u6027\u6210\u679C\u6C47\u62A5\u7ED9\u53F2\u5B98\uFF08\u63D0\u4EA4\u3001\u51B3\u5B9A\u3001\u5B50 agent \u7684\u53D1\u73B0\uFF09\uFF0C\u5B83\u91CD\u5199 .cw/HISTORY.md\u3002\u5199\u4E0D\u4E0B\u53BB\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u7531\u4F60\u56DE\u7B54\u540E\u518D\u6C47\u62A5\u3002",
+    input: "report"
+  }
+];
 var TIMEOUT_DESCRIPTION = `\u672C\u6B21\u8C03\u7528\u7684\u8D85\u65F6\u79D2\u6570\uFF08${MIN_TIMEOUT_S}\u2013${MAX_TIMEOUT_S}\uFF0C\u8D8A\u754C\u4F1A\u88AB\u5939\u4F4F\uFF09\u3002\u6309\u8F93\u5165\u5927\u5C0F\u4F30\uFF1A\u5C0F\u8F93\u5165\u4E0D\u4F20\uFF0C\u7528\u9ED8\u8BA4 ${MIN_TIMEOUT_S}\uFF1B\u660E\u663E\u5F88\u5927\uFF08\u957F diff\u3001\u8DE8\u5F88\u591A\u6587\u4EF6\uFF09\u5C31\u5148\u8BBE\u957F\u4E00\u4E9B\u3002\u8D85\u65F6\u540E\u8FD4\u56DE\u91CC\u4F1A\u7ED9\u4E0B\u4E00\u6863\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF09\uFF0C\u7167\u7740\u91CD\u8BD5\uFF1B\u5DF2\u5230 ${MAX_TIMEOUT_S} \u8FD8\u8D85\u65F6\u5C31\u62C6\u5C0F\u8F93\u5165\uFF0C\u522B\u518D\u52A0\u3002`;
 var HISTORY_FILE = "HISTORY.md";
+async function callRole(ctx, role, params, signal) {
+  const model = ctx.project.models[role.name];
+  if (model === null) return `[counterweight] \u672A\u914D\u7F6E [models].${role.name}\uFF0C${role.tool} \u4E0D\u53EF\u7528\u3002`;
+  const askedS = clampTimeoutS(params.timeout_s);
+  if (role.input === "report") return await chronicle(ctx, model, params.report, signal, askedS);
+  const message2 = role.input === "question" ? params.question : reviewMessage({ request: params.request, diff: params.diff });
+  const router = ctx.project.router;
+  if (router !== null && (role.name === "review" || role.name === "over_review")) {
+    const verdict = await gate(router, role.name, message2, signal);
+    await recordEvent(ctx.repo, ctx.session, "gate", {
+      role: role.name,
+      model: router.model,
+      p: verdict.p,
+      skipped: verdict.skip,
+      audited: verdict.audited,
+      error: verdict.error,
+      ms: verdict.ms
+    }).catch(() => {
+    });
+    if (verdict.skip) {
+      return `[counterweight] ${role.tool}\uFF08\u9884\u5224\u653E\u884C\uFF1A${router.model} \u5224\u6709\u95EE\u9898\u7684\u6982\u7387 ${verdict.p} \u2264 ${router.skip_below}\uFF0C\u672A\u8D77\u5BA1\u67E5\u6A21\u578B\uFF09\uFF1A
+none`;
+    }
+  }
+  const run = await runAndMeter(ctx, role.name, role.tool, model, message2, signal, askedS);
+  const asking = role.input === "review" && run.answer?.trim().startsWith("ASK:");
+  return asking ? `${run.text}
+\u5BA1\u67E5\u8005\u9700\u8981\u8865\u5145\u4FE1\u606F\uFF1A\u56DE\u7B54\u4E0A\u9762\u7684\u95EE\u9898\uFF0C\u628A\u7B54\u6848\u5199\u8FDB request\uFF0C\u518D\u8C03\u7528 ${role.tool} \u4E00\u6B21\u3002` : run.text;
+}
 function reviewMessage(params) {
   return `\u8981\u6C42\uFF1A
 ${params.request}
@@ -9229,7 +8980,6 @@ async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
     sandbox: ctx.project.sandbox,
     message: message2,
     signal,
-    codex: ctx.codex,
     timeoutMs
   });
   let spent = 0;
@@ -9282,7 +9032,7 @@ ${run.answer}`
 }
 async function readHistory(repo) {
   try {
-    return await (0, import_promises9.readFile)(import_node_path9.default.join(repo, ".cw", HISTORY_FILE), "utf8");
+    return await (0, import_promises7.readFile)(import_node_path6.default.join(repo, ".cw", HISTORY_FILE), "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -9320,332 +9070,104 @@ ${body.slice(0, 200)}`;
   return `[counterweight] cw_chronicle \u5DF2\u66F4\u65B0 .cw/${HISTORY_FILE}\u3002`;
 }
 
-// src/adapters/codex/patch.ts
-var PATH_LINE = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/;
-function patchPaths(text2) {
-  const found = /* @__PURE__ */ new Set();
-  for (const line of text2.split("\n")) {
-    const match = PATH_LINE.exec(line.replace(/\r$/, ""));
-    if (match !== null && match[1].trim() !== "") found.add(match[1].trim());
-  }
-  return [...found];
-}
-
-// src/adapters/codex/transcript.ts
-var text = (value) => [{ type: "text", text: value }];
-function blocksText(content) {
-  if (!Array.isArray(content)) return "";
-  return content.map((block) => block !== null && typeof block === "object" ? block.text : void 0).filter((part) => typeof part === "string").join("\n");
-}
-function parseTranscript(rollout) {
-  const messages = [];
-  const names = /* @__PURE__ */ new Map();
-  for (const line of rollout.split("\n")) {
-    if (line.trim() === "") continue;
-    let entry;
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      continue;
-    }
-    const payload = entry?.payload;
-    if (entry?.type !== "response_item" || payload === null || typeof payload !== "object") continue;
-    switch (payload.type) {
-      case "message":
-        if (payload.role === "user" || payload.role === "assistant") {
-          messages.push({ role: payload.role, content: text(blocksText(payload.content)) });
-        }
-        break;
-      case "function_call":
-      case "custom_tool_call": {
-        const name = String(payload.name ?? "");
-        if (typeof payload.call_id === "string") names.set(payload.call_id, name);
-        messages.push({
-          role: "assistant",
-          content: [{ type: "toolCall", name, arguments: payload.type === "function_call" ? payload.arguments : payload.input }]
-        });
-        break;
-      }
-      case "function_call_output":
-      case "custom_tool_call_output": {
-        const output = typeof payload.output === "string" ? payload.output : JSON.stringify(payload.output ?? "");
-        messages.push({
-          role: "toolResult",
-          toolName: names.get(String(payload.call_id)) ?? "",
-          content: text(output)
-        });
-        break;
-      }
-    }
-  }
-  return messages;
-}
-
-// src/adapters/codex/hook.ts
-var MAX_CHECK_TIMEOUT_S = 3570;
+// src/adapters/codex/mcp.ts
 var message = (error) => error instanceof Error ? error.message : String(error);
-var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/codex.toml \u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
-var UNVERIFIABLE_REASON = (value) => `[counterweight] \u8DEF\u5F84\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF08\u7B26\u53F7\u94FE\u63A5\u9003\u9038\u4ED3\u5E93\u6216\u4E0D\u53EF\u89E3\u6790\uFF09\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${value}`;
-async function main() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  const input = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  const cwd = input.cwd ?? process.cwd();
-  const root = await realpathOr(await repoToplevel(cwd) ?? cwd);
-  let output = null;
-  switch (input.hook_event_name) {
-    case "SessionStart":
-      output = await sessionStart(root);
-      break;
-    case "PreToolUse":
-      output = await preToolUse(root, cwd, input);
-      break;
-    case "Stop":
-      output = await stop(root, input);
-      break;
-    case "UserPromptSubmit":
-      await savePrompt(input.session_id ?? "", input.turn_id ?? "", input.prompt ?? "").catch(() => {
-      });
-      break;
-    case "SessionEnd":
-      await endSession(input.session_id ?? "").catch(() => {
-      });
-      break;
-    case "PostModelRequest":
-      await postModelRequest(root, input);
-      break;
-  }
-  if (output !== null) process.stdout.write(`${JSON.stringify(output)}
-`);
-}
-async function sessionStart(root) {
-  const notes = [];
-  let project = null;
-  try {
-    project = await loadProjectConfig(root);
-    for (const item of project?.autoSkipped ?? []) {
-      notes.push(`[counterweight] [auto].${item} \u5DF2\u6253\u5F00\u4F46 .cw/codex.toml \u6CA1\u914D\u5BF9\u5E94\u6A21\u578B\uFF0C\u8BE5\u9879\u89C6\u4E3A\u5173\u95ED`);
-    }
-    if (project?.sandbox === "none") notes.push('[counterweight] \u89D2\u8272\u5B50\u8FDB\u7A0B\u6CA1\u6709\u6C99\u7BB1\uFF08.cw/codex.toml [roles].sandbox = "none"\uFF09');
-  } catch (error) {
-    notes.push(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF1A${message(error)}`);
-  }
-  const output = {
-    hookSpecificOutput: {
-      hookEventName: "SessionStart",
-      additionalContext: `${sessionSection(project?.auto ?? { review: false, chronicle: false })}
-
-Counterweight ${await pluginVersion()} active`
-    }
+var timeoutField = { type: "integer", minimum: MIN_TIMEOUT_S, maximum: MAX_TIMEOUT_S, description: TIMEOUT_DESCRIPTION };
+var string = { type: "string", minLength: 1 };
+function inputSchema(input) {
+  const fields = input === "question" ? { question: string } : input === "report" ? { report: string } : { request: string, diff: string };
+  return {
+    type: "object",
+    properties: { ...fields, timeout_s: timeoutField },
+    required: Object.keys(fields),
+    additionalProperties: false
   };
-  if (notes.length > 0) output.systemMessage = notes.join("\n");
-  return output;
 }
-async function pluginVersion() {
+var TOOLS = ROLES.map((role) => ({
+  name: role.tool,
+  description: role.description,
+  inputSchema: inputSchema(role.input)
+}));
+var pending = /* @__PURE__ */ new Map();
+var inflight = /* @__PURE__ */ new Set();
+var send = (payload) => {
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...payload })}
+`);
+};
+var reply = (id, result) => send({ id, result });
+var textResult = (text, isError = false) => ({ content: [{ type: "text", text }], ...isError ? { isError } : {} });
+async function callTool(request, signal) {
+  const params = request.params ?? {};
+  const role = ROLES.find((item) => item.tool === params.name);
+  if (role === void 0) return textResult(`[counterweight] \u672A\u77E5\u5DE5\u5177 ${params.name}`, true);
+  const meta = params._meta ?? {};
+  const cwd = meta["codex/sandbox-state"]?.sandboxCwd;
+  if (typeof cwd !== "string") return textResult("[counterweight] \u8BF7\u6C42\u91CC\u6CA1\u6709 sandboxCwd\uFF0C\u65E0\u6CD5\u786E\u5B9A\u4ED3\u5E93\u6839\u3002", true);
+  const dir = await realpathOr(cwd.startsWith("file://") ? (0, import_node_url.fileURLToPath)(cwd) : cwd);
+  const repo = await realpathOr(await repoToplevel(dir) ?? dir);
+  let project;
   try {
-    const manifest = JSON.parse(await (0, import_promises10.readFile)(
-      import_node_path10.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
-      "utf8"
-    ));
-    return typeof manifest.version === "string" ? manifest.version : "unknown";
-  } catch {
-    return "unknown";
+    project = await loadProjectConfig(repo);
+  } catch (error) {
+    return textResult(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C${role.tool} \u4E0D\u53EF\u7528\uFF1A${message(error)}`, true);
+  }
+  if (project === null) return textResult(`[counterweight] \u672A\u914D\u7F6E [models].${role.name}\uFF0C${role.tool} \u4E0D\u53EF\u7528\u3002`);
+  return textResult(await callRole({
+    repo,
+    session: typeof meta.sessionId === "string" ? meta.sessionId : "",
+    project
+  }, role, params.arguments ?? {}, signal));
+}
+function handle(request) {
+  const { id, method } = request;
+  if (id === void 0) {
+    if (method === "notifications/cancelled" && request.params?.requestId !== void 0) {
+      pending.get(JSON.stringify(request.params.requestId))?.abort();
+    }
+    return;
+  }
+  switch (method) {
+    case "initialize":
+      reply(id, {
+        protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
+        capabilities: { tools: {}, experimental: { "codex/sandbox-state": {} } },
+        serverInfo: { name: "counterweight", version: "0.2.0" }
+      });
+      return;
+    case "ping":
+      reply(id, {});
+      return;
+    case "tools/list":
+      reply(id, { tools: TOOLS });
+      return;
+    case "tools/call": {
+      const key = JSON.stringify(id);
+      const controller = new AbortController();
+      pending.set(key, controller);
+      const work = callTool(request, controller.signal).then((result) => reply(id, result), (error) => reply(id, textResult(`[counterweight] ${message(error)}`, true))).finally(() => {
+        pending.delete(key);
+        inflight.delete(work);
+      });
+      inflight.add(work);
+      return;
+    }
+    default:
+      send({ id, error: { code: -32601, message: `method not found: ${method}` } });
   }
 }
-var deny = (reason) => ({
-  hookSpecificOutput: {
-    hookEventName: "PreToolUse",
-    permissionDecision: "deny",
-    permissionDecisionReason: reason
+var lines = (0, import_node_readline.createInterface)({ input: process.stdin });
+lines.on("line", (line) => {
+  if (line.trim() === "") return;
+  try {
+    handle(JSON.parse(line));
+  } catch (error) {
+    process.stderr.write(`[counterweight] ${message(error)}
+`);
   }
 });
-async function preToolUse(root, cwd, input) {
-  let project;
-  try {
-    project = await loadProjectConfig(root);
-  } catch {
-    return null;
-  }
-  if (project === null) return null;
-  try {
-    const command = input.tool_input?.command;
-    const paths = typeof command === "string" ? patchPaths(command) : [];
-    if (paths.length === 0) return deny("[counterweight] \u65E0\u6CD5\u4ECE\u8865\u4E01\u4E2D\u89E3\u6790\u51FA\u8DEF\u5F84\uFF0C\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF0C\u5DF2\u62D2\u7EDD\u3002");
-    const realCwd = await realpathOr(cwd);
-    const reasons = [];
-    for (const raw of paths) {
-      const reason = await checkProtectedTarget(root, realCwd, project.protect.paths, raw);
-      if (reason !== null) reasons.push(reason);
-    }
-    if (reasons.length > 0) return deny(reasons.join("\n"));
-    return await pauseBeforeFirstEdit(root, realCwd, project, input, paths);
-  } catch (error) {
-    return deny(`[counterweight] \u4FDD\u62A4\u68C0\u67E5\u51FA\u9519\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${message(error)}`);
-  }
-}
-async function pauseBeforeFirstEdit(root, cwd, project, input, paths) {
-  try {
-    const planner = project.models.planner;
-    if (!project.auto.pause || planner === null || input.agent_id !== void 0) return null;
-    const targets = paths.map((raw) => toRepoRelative(root, cwd, raw)).filter((relative) => isSourceEdit(relative));
-    if (targets.length === 0) return null;
-    const session = input.session_id ?? "";
-    if (!await claim(session, input.turn_id ?? "", "pause")) return null;
-    const started = Date.now();
-    const outcome = async (result) => {
-      await recordEvent(root, session, "pause", { outcome: result, ms: Date.now() - started, tool: "apply_patch" }).catch(() => {
-      });
-    };
-    try {
-      const rollout = await (0, import_promises10.readFile)(input.transcript_path ?? "", "utf8");
-      const body = plannerMessage(
-        renderTranscript(parseTranscript(rollout)),
-        targets.join(", "),
-        "apply_patch",
-        { command: input.tool_input?.command }
-      );
-      const run = await runAndMeter(
-        { repo: root, session, project },
-        "planner",
-        "cw_pause",
-        planner,
-        body,
-        new AbortController().signal
-      );
-      await outcome(run.answer === null ? "failed" : "planned");
-      return run.answer === null ? null : deny(pauseReason(run.answer.trim()));
-    } catch {
-      await outcome("failed");
-      return null;
-    }
-  } catch {
-    return null;
-  }
-}
-async function checkProtectedTarget(root, cwd, patterns, raw) {
-  const lexical = toRepoRelative(root, cwd, raw);
-  if (lexical === null) return `[counterweight] \u8DEF\u5F84\u4E0D\u5728\u4ED3\u5E93\u5185\uFF0C\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${raw}`;
-  if (isProtected(lexical, patterns)) return PROTECTED_REASON(lexical);
-  let resolved;
-  try {
-    resolved = await resolveWriteTarget(root, lexical);
-  } catch (error) {
-    if (isNotFound(error)) return null;
-    return UNVERIFIABLE_REASON(raw);
-  }
-  if (isProtected(resolved, patterns)) {
-    const via = resolved === lexical ? "" : `\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u8BE5\u53D7\u4FDD\u62A4\u6587\u4EF6\uFF09`;
-    return `${PROTECTED_REASON(resolved)}${via}`;
-  }
-  return null;
-}
-function toRepoRelative(repoRoot, cwd, value) {
-  const relative = import_node_path10.default.relative(repoRoot, import_node_path10.default.resolve(cwd, value));
-  if (relative === "" || relative.startsWith("..") || import_node_path10.default.isAbsolute(relative)) return null;
-  return relative.split(import_node_path10.default.sep).join("/");
-}
-async function stop(root, input) {
-  let project;
-  try {
-    project = await loadProjectConfig(root);
-  } catch (error) {
-    return { systemMessage: `[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message(error)}` };
-  }
-  if (project === null) return null;
-  const session = input.session_id ?? "";
-  const turn = input.turn_id ?? "";
-  const texts = [];
-  let checkReport = null;
-  if (project.check !== null) {
-    try {
-      const check = project.check;
-      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
-      const started = Date.now();
-      const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout } });
-      const passed = checkPassed(outcome);
-      const retry = !passed && await claim(session, turn, "repair");
-      let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final: !passed && !retry });
-      if (timeout < check.timeout_s) {
-        report += `
-[counterweight] check.timeout_s=${check.timeout_s} \u8D85\u8FC7\u4E0A\u9650\uFF0C\u5B9E\u9645\u8D85\u65F6 ${timeout}s`;
-      }
-      await recordEvent(root, session, "check", {
-        exit_code: outcome.exitCode,
-        timed_out: outcome.timedOut,
-        spawn_error: outcome.runnerError,
-        ms: Date.now() - started,
-        outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported"
-      }).catch(() => {
-      });
-      if (retry) return { decision: "block", reason: report };
-      checkReport = report;
-    } catch (error) {
-      checkReport = `[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u5B8C\u6210\uFF0C\u672C\u8F6E\u6CA1\u6709\u5F97\u5230\u68C0\u67E5\u7ED3\u8BBA\uFF1A${message(error)}`;
-    }
-    texts.push(checkReport);
-  }
-  const auto = await runAuto(root, project, session, turn, checkReport);
-  if (auto.findings !== null) return { decision: "block", reason: auto.findings, systemMessage: checkReport ?? void 0 };
-  if (auto.text !== null) texts.push(auto.text);
-  return texts.length === 0 ? null : { systemMessage: texts.join("\n\n") };
-}
-async function runAuto(root, project, session, turn, checkLine) {
-  const none = { text: null, findings: null };
-  try {
-    if (!project.auto.review && !project.auto.chronicle) return none;
-    const diff = await workingDiff(root);
-    if (diff === null || diff.trim() === "") return none;
-    const ctx = { repo: root, session, project };
-    const signal = new AbortController().signal;
-    if (project.auto.review) {
-      const prompt = await loadPrompt(session, turn);
-      const body = reviewMessage({ request: prompt, diff });
-      const [correct, over] = await Promise.all([
-        runAndMeter(ctx, "review", "cw_review", project.models.review, body, signal),
-        runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review, body, signal)
-      ]);
-      const findings = [correct, over].map((run) => run.answer?.trim() ?? "").filter((answer) => answer !== "" && answer !== "none" && !answer.startsWith("ASK:"));
-      if (findings.length > 0) {
-        if (await claim(session, turn, "findings")) {
-          return { text: null, findings: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u5904\u7406\u6216\u8BF4\u660E\u4E3A\u4EC0\u4E48\u4E0D\u5904\u7406\uFF1A
-
-${findings.join("\n\n")}` };
-        }
-        return { text: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\uFF08\u7EED\u8DD1\u4E4B\u540E\uFF09\u4ECD\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
-
-${findings.join("\n\n")}`, findings: null };
-      }
-    }
-    if (project.auto.chronicle) {
-      const report = chronicleReport(await loadPrompt(session, turn), changedFiles(diff), checkLine);
-      await chronicle(ctx, project.models.historian, report, signal);
-    }
-    return none;
-  } catch {
-    return none;
-  }
-}
-async function postModelRequest(root, input) {
-  const usage = input.token_usage;
-  if (input.status !== "completed" || usage === void 0) return;
-  try {
-    await recordUsage(root, {
-      time: (/* @__PURE__ */ new Date()).toISOString(),
-      session: input.session_id ?? "",
-      model: input.model ?? "",
-      input: usage.input_tokens - usage.cached_input_tokens,
-      output: usage.output_tokens,
-      cache_read: usage.cached_input_tokens,
-      cache_write: usage.cache_write_input_tokens,
-      cost_total: null
-    });
-  } catch {
-  }
-}
-main().then(() => process.exit(0), (error) => {
-  process.stderr.write(`[counterweight] ${message(error)}
-`);
-  process.exit(0);
+lines.on("close", () => {
+  for (const controller of pending.values()) controller.abort();
+  void Promise.allSettled([...inflight]).then(() => process.exit(0));
 });
 /*! Bundled license information:
 

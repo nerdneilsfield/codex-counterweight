@@ -69,12 +69,10 @@ async function callTool(request: Request, signal: AbortSignal) {
     return textResult(`[counterweight] 配置非法，${role.tool} 不可用：${message(error)}`, true);
   }
   if (project === null) return textResult(`[counterweight] 未配置 [models].${role.name}，${role.tool} 不可用。`);
-  const codex = meta["codex/sandbox-launcher"]?.codexExecutable;
   return textResult(await callRole({
     repo,
     session: typeof meta.sessionId === "string" ? meta.sessionId : "",
     project,
-    codex: typeof codex === "string" ? codex : undefined,
   }, role, params.arguments ?? {}, signal));
 }
 

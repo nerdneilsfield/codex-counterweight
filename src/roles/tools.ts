@@ -17,14 +17,13 @@ export interface RoleContext {
   repo: string;
   session: string;
   project: ProjectConfig;
-  codex?: string;
 }
 
 /**
  * 超时后给调用方的下一步：翻倍重试，封顶 1800；已经用满 1800 就别再加，该拆小输入。
  * 写在返回文本里，调用方不用记规则。
  */
-export function timeoutAdvice(tool: string, usedMs: number): string {
+function timeoutAdvice(tool: string, usedMs: number): string {
   const next = nextTimeoutS(usedMs);
   return next === null
     ? `已经用满 ${MAX_TIMEOUT_S} 秒上限，再加没有用：把输入拆小（分文件、分提交）后再调用 ${tool}。`
@@ -122,7 +121,6 @@ export async function runAndMeter(
     sandbox: ctx.project.sandbox,
     message,
     signal,
-    codex: ctx.codex,
     timeoutMs,
   });
   let spent = 0;

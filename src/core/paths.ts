@@ -32,7 +32,7 @@ export function relativeParts(value: string): string[] {
  * arguments are expected to be absolute, already-realpathed paths, so callers
  * must resolve symlinks before asking.
  */
-export function pathInside(root: string, candidate: string): boolean {
+function pathInside(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

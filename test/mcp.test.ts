@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { alive, childEnv, fakeCalls, installFakeCodex, PLUGIN_ROOT, until, writeConfig, type Sandbox } from "./support.js";
 
-const MCP = path.join(PLUGIN_ROOT, "dist/mcp.js");
+const MCP = path.join(PLUGIN_ROOT, "dist/mcp.cjs");
 const ALL_MODELS = '[models]\nexplorer = "m"\nreview = "m"\nover_review = "m"\nresearch = "m"\nhistorian = "m"\nplanner = "m"\n';
 
 let sandbox: Sandbox;
@@ -18,6 +18,7 @@ beforeEach(async () => {
   const dir = await mkdtemp(path.join(tmpdir(), "cw-mcp-"));
   sandbox = { repo: path.join(dir, "repo"), data: path.join(dir, "data"), bin: path.join(dir, "bin") };
   execFileSync("git", ["init", "-q", sandbox.repo]);
+  await writeConfig(sandbox.repo, "project.toml", "version = 1\n");
   await writeConfig(sandbox.repo, "codex.toml", ALL_MODELS);
   // The MCP environment is a whitelist in real Codex; mimic that.
   const env = childEnv(sandbox);

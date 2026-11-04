@@ -14,7 +14,7 @@ import path from "node:path";
  *
  * One assistant message's usage, appended to `meter.jsonl`.
  */
-export interface UsageRecord {
+interface UsageRecord {
   kind: "usage";
   time: string;
   session: string;
@@ -32,7 +32,7 @@ export interface UsageRecord {
  *
  * One harness event (an end check or an explorer run), appended to `meter.jsonl`.
  */
-export interface EventRecord {
+interface EventRecord {
   kind: "event";
   time: string;
   session: string;

@@ -8,14 +8,14 @@
  */
 import type { RouterConfig } from "./config.js";
 
-export type GateRole = "review" | "over_review";
+type GateRole = "review" | "over_review";
 
 const QUESTIONS: Record<GateRole, string> = {
   review: "这次改动是否存在行为错误：逻辑错误、被削弱的校验或错误处理、没有同步更新的调用方",
   over_review: "这次改动是否包含没有当前需求支撑的抽象、兜底分支、配置项、兼容层或多余的测试",
 };
 
-export interface GateVerdict {
+interface GateVerdict {
   /** true：不起审查模型。 */
   skip: boolean;
   /** 模型给的“有问题”概率；请求失败时为 null。 */

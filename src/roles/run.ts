@@ -9,8 +9,8 @@ import { runProcess } from "../core/process.js";
 import { rolePrompt, type RoleName } from "./prompts.js";
 
 /** explorer、review、over_review 的预算。research 单独更长。 */
-export const ROLE_TIMEOUT_MS = 300_000;
-export const RESEARCH_TIMEOUT_MS = 1_800_000;
+const ROLE_TIMEOUT_MS = 300_000;
+const RESEARCH_TIMEOUT_MS = 1_800_000;
 
 export function roleTimeoutMs(role: RoleName): number {
   return role === "research" ? RESEARCH_TIMEOUT_MS : ROLE_TIMEOUT_MS;
@@ -33,7 +33,7 @@ export function nextTimeoutS(usedMs: number): number | null {
   return Math.min(MAX_TIMEOUT_S, used * 2);
 }
 
-export interface UsageSample {
+interface UsageSample {
   /** 不含缓存命中的输入。 */
   input: number;
   output: number;
@@ -41,7 +41,7 @@ export interface UsageSample {
   cacheWrite: number;
 }
 
-export interface RoleRun {
+interface RoleRun {
   answer: string | null;
   error: string | null;
   usage: UsageSample[];
@@ -49,7 +49,7 @@ export interface RoleRun {
   cancelled: boolean;
 }
 
-export interface RoleRequest {
+interface RoleRequest {
   role: RoleName;
   workRoot: string;
   /** Codex 模型 slug。 */
@@ -59,11 +59,10 @@ export interface RoleRequest {
   message: string;
   signal?: AbortSignal;
   /** codex 可执行文件；不传用 PATH 上的 `codex`。 */
-  codex?: string;
   timeoutMs?: number;
 }
 
-export function roleArgs(request: Pick<RoleRequest, "role" | "model" | "sandbox">): string[] {
+function roleArgs(request: Pick<RoleRequest, "role" | "model" | "sandbox">): string[] {
   return [
     "exec", "--json", "--ephemeral", "--skip-git-repo-check",
     "--disable", "hooks", "--disable", "plugins",
@@ -82,7 +81,7 @@ export async function runRole(request: RoleRequest): Promise<RoleRun> {
     await writeFile(messagePath, request.message);
     const outcome = await runProcess({
       cwd: request.workRoot,
-      cmd: [request.codex ?? "codex", ...roleArgs(request)],
+      cmd: ["codex", ...roleArgs(request)],
       env: { ...process.env },
       timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
       stdoutPath: path.join(scratch, "stdout.jsonl"),
@@ -128,7 +127,7 @@ interface ParsedEvents {
 }
 
 /** 回答是最后一条 agent_message；`error` 类 item 只是配置警告，忽略。 */
-export function parseEvents(stdout: string): ParsedEvents {
+function parseEvents(stdout: string): ParsedEvents {
   const usage: UsageSample[] = [];
   let answer: string | null = null;
   let completed = false;

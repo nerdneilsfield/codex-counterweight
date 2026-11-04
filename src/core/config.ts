@@ -102,7 +102,7 @@ const projectSchema = {
 
 const DEFAULT_TIMEOUT_S = 600;
 
-export type RoleKey = "explorer" | "review" | "over_review" | "research" | "historian" | "planner";
+type RoleKey = "explorer" | "review" | "over_review" | "research" | "historian" | "planner";
 
 export interface RouterConfig {
   url: string;
@@ -156,12 +156,12 @@ export interface ProjectConfig {
   sandbox: "read-only" | "none";
 }
 
-/** 两个文件都不存在返回 null。任一存在但不可读或非法时抛错。 */
+/** project.toml 不存在返回 null，即使 codex.toml 存在。codex.toml 可以缺。任一存在但不可读或非法时抛错。 */
 export async function loadProjectConfig(repo: string): Promise<ProjectConfig | null> {
   const project = await readOptional(repo, "project.toml");
   const codex = await readOptional(repo, "codex.toml");
-  if (project === null && codex === null) return null;
-  return parseProjectConfig(project ?? "version = 1\n", codex ?? "");
+  if (project === null) return null;
+  return parseProjectConfig(project, codex ?? "");
 }
 
 async function readOptional(repo: string, name: string): Promise<string | null> {

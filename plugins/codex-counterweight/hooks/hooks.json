@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
+            "command": "node \"$PLUGIN_ROOT/dist/hook.cjs\"",
             "timeout": 10
           }
         ],
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
+            "command": "node \"$PLUGIN_ROOT/dist/hook.cjs\"",
             "timeout": 1830
           }
         ]
@@ -29,7 +29,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
+            "command": "node \"$PLUGIN_ROOT/dist/hook.cjs\"",
             "timeout": 7200,
             "statusMessage": "运行结束检查和自动审查"
           }
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
+            "command": "node \"$PLUGIN_ROOT/dist/hook.cjs\"",
             "timeout": 5
           }
         ]
@@ -52,7 +52,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
+            "command": "node \"$PLUGIN_ROOT/dist/hook.cjs\"",
             "timeout": 10
           }
         ]
@@ -63,7 +63,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$PLUGIN_ROOT/dist/hook.js\"",
+            "command": "node \"$PLUGIN_ROOT/dist/hook.cjs\"",
             "timeout": 3
           }
         ]

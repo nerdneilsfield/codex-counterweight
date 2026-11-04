@@ -5,7 +5,7 @@
 import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export type Claim = "repair" | "findings" | "pause";
+type Claim = "repair" | "findings" | "pause";
 
 /** session_id 含路径分隔符或 `..` 时不可用。 */
 function sessionDir(session: string): string | null {

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 export const PLUGIN_ROOT = path.resolve("plugins/codex-counterweight");
-export const HOOK = path.join(PLUGIN_ROOT, "dist/hook.js");
+export const HOOK = path.join(PLUGIN_ROOT, "dist/hook.cjs");
 
 /** 带假 codex 的环境：`bin` 在 PATH 最前，hook 的 PLUGIN_DATA 和 PLUGIN_ROOT 指向临时目录。 */
 export interface Sandbox {

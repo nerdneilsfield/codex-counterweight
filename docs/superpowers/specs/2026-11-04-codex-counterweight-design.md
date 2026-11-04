@@ -77,13 +77,13 @@ plugins/codex-counterweight/
   .codex-plugin/plugin.json
   hooks/hooks.json
   skills/cw-setup/SKILL.md
-  dist/hook.js                打包产物，提交进仓库
+  dist/hook.cjs                打包产物，提交进仓库
 .agents/plugins/marketplace.json
 ```
 
-这个 marketplace 加 `plugins/<name>` 的结构已经实测能安装。`dist/package.json` 声明 `commonjs`，否则仓库根的 `"type": "module"` 会让 Node 按 ESM 加载 CJS 包。
+这个 marketplace 加 `plugins/<name>` 的结构已经实测能安装。产物扩展名用 `.cjs`，这样仓库根的 `"type": "module"` 不会让 Node 按 ESM 加载 CJS 包。
 
-`dist/hook.js` 用 esbuild 打成单文件，依赖全部打进去。插件安装不会运行 `npm install`，所以 `dist/` 必须提交。hook 命令是 `node "$PLUGIN_ROOT/dist/hook.js"`。
+`dist/hook.cjs` 用 esbuild 打成单文件，依赖全部打进去。插件安装不会运行 `npm install`，所以 `dist/` 必须提交。hook 命令是 `node "$PLUGIN_ROOT/dist/hook.cjs"`。
 
 ### 配置
 
@@ -184,7 +184,7 @@ codex plugin add codex-counterweight@<marketplace>
 
 ### 测试
 
-- 单元测试：`patch.ts`、hook 分发。输入用实测的 hook JSON 样本，通过 stdin 喂给 `dist/hook.js`，断言 stdout。
+- 单元测试：`patch.ts`、hook 分发。输入用实测的 hook JSON 样本，通过 stdin 喂给 `dist/hook.cjs`，断言 stdout。
 - 进程组：按“Stop”一节的两条验收标准写测试。
 - 兼容：一份 pi 版合法的配置，在这里也合法；已确认的未知字段照样报错。
 - 真实 Codex：手动脚本，用 `$HOME` 下的临时 `CODEX_HOME`，不进 CI。
@@ -198,19 +198,7 @@ codex plugin add codex-counterweight@<marketplace>
 - 检查运行时按 Esc 中断，检查进程和看门狗都没有残留。
 - 除 `SessionEnd` 和 `Interrupt` 外，hook 的 `timeout` 没有上限（`normalize_command_hook`），3600 秒有效。
 
-## 第二版方向
-
-这部分不是实施规格，第一版做完后另写设计。已定的方向：
-
-- `.cw/codex.toml`：只放 `[models]`（Codex 模型 slug）和 `[roles] sandbox`。不复制共用字段。Codex 版把它和 `project.toml` 一起保护。诊断时显示哪个文件生效。
-- MCP：`plugins/codex-counterweight/.mcp.json` 用 stdio，`"cwd": "."`，`tool_timeout_sec` 大于 1800。声明 `codex/sandbox-state` capability，从 `_meta` 取 `sandboxCwd`。
-- 角色子进程：`codex exec --ephemeral --disable hooks --disable plugins -m <model> -c developer_instructions=...`。不能用 `--ignore-user-config`，代理配置在用户配置里。
-- 取消：MCP server 处理 `notifications/cancelled`，自己管截止时间并杀子进程。
-- 状态：hook 是一次性进程，额度、PAUSE 和史官队列按 `session_id` 加 `turn_id` 存到 `PLUGIN_DATA`。`stop_hook_active` 分不清检查续跑和审查续跑。
-- 自动审查排在检查定稿后，与 pi 版相同，要有独立的时间预算。
-- PAUSE 读 `transcript_path` 的 rollout JSONL，读不到就放行。
-- 模型满载等错误如实返回。
-- 已知风险：同一项目同时开 pi 和 Codex 跑史官，可能丢一次 `HISTORY.md` 更新。
+第二版方向见 docs/plans/2026-11-04-v2-roles.md。
 
 ## 留给实现者
 

@@ -16,7 +16,7 @@ import path from "node:path";
  * says: the model must not be able to turn the check or the guard off by
  * editing it.
  */
-export const CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml"];
+const CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml"];
 
 /**
  * 判断一个仓库内相对路径是否属于受保护集合：等于某条路径，或位于某条目录前缀之下。
