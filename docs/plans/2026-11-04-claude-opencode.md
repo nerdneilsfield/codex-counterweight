@@ -140,7 +140,7 @@ type RoleRunner = (request: RoleRequest) => Promise<RoleRun>;
 - [x] T1
 - [x] T2
 - [x] T3
-- [ ] T4
+- [x] T4
 - [ ] T5
 
 恢复方式：看 `git log` 和本节勾选状态，从第一个未完成任务继续。
