@@ -1,0 +1,11 @@
+{
+  "name": "codex-counterweight",
+  "plugins": [
+    {
+      "name": "codex-counterweight",
+      "source": { "source": "local", "path": "./plugins/codex-counterweight" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}
