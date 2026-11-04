@@ -3,10 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22.19.0" },
+  "engines": {
+    "node": ">=22.19.0"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/adapters/codex/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/hook.cjs && esbuild src/adapters/codex/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/mcp.cjs",
+    "build": "esbuild src/adapters/codex/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/hook.cjs && esbuild src/adapters/codex/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/mcp.cjs && esbuild src/adapters/claude/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/hook.cjs && esbuild src/adapters/claude/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/mcp.cjs",
     "test": "npm run build && vitest run"
   },
   "devDependencies": {

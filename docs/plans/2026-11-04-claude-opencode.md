@@ -138,7 +138,7 @@ type RoleRunner = (request: RoleRequest) => Promise<RoleRun>;
 ## 进度
 
 - [x] T1
-- [ ] T2
+- [x] T2
 - [ ] T3
 - [ ] T4
 - [ ] T5

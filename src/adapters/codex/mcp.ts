@@ -1,126 +1,18 @@
-/**
- * 五个角色工具的 MCP server：stdio 上换行分隔的 JSON-RPC，只实现 initialize、tools/list、tools/call、
- * ping 和 notifications/cancelled。每次调用重新读配置；仓库根、会话和 codex 可执行文件都来自 `_meta`。
- */
-import { createInterface } from "node:readline";
+/** Codex 的 MCP 入口：仓库根和会话来自请求 `_meta`。 */
 import { fileURLToPath } from "node:url";
-import { loadProjectConfig } from "../../core/config.js";
-import { repoToplevel } from "../../core/gitstate.js";
-import { realpathOr } from "../../core/paths.js";
-import { MAX_TIMEOUT_S, MIN_TIMEOUT_S } from "../../roles/run.js";
+import { serveMcp } from "../mcp.js";
 import { runRole } from "./runner.js";
-import { callRole, ROLES, TIMEOUT_DESCRIPTION } from "../../roles/tools.js";
 
-type Id = string | number;
-interface Request {
-  id?: Id;
-  method?: string;
-  params?: {
-    name?: string;
-    arguments?: Record<string, unknown>;
-    requestId?: Id;
-    protocolVersion?: string;
-    _meta?: Record<string, any>;
-  };
-}
-
-const message = (error: unknown) => error instanceof Error ? error.message : String(error);
-
-const timeoutField = { type: "integer", minimum: MIN_TIMEOUT_S, maximum: MAX_TIMEOUT_S, description: TIMEOUT_DESCRIPTION };
-const string = { type: "string", minLength: 1 };
-
-function inputSchema(input: (typeof ROLES)[number]["input"]) {
-  const fields = input === "question" ? { question: string }
-    : input === "report" ? { report: string }
-    : { request: string, diff: string };
-  return {
-    type: "object",
-    properties: { ...fields, timeout_s: timeoutField },
-    required: Object.keys(fields),
-    additionalProperties: false,
-  };
-}
-
-const TOOLS = ROLES.map((role) => ({
-  name: role.tool, description: role.description, inputSchema: inputSchema(role.input),
-}));
-
-const pending = new Map<string, AbortController>();
-const inflight = new Set<Promise<void>>();
-
-const send = (payload: Record<string, unknown>): void => {
-  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...payload })}\n`);
-};
-const reply = (id: Id, result: unknown) => send({ id, result });
-const textResult = (text: string, isError = false) => ({ content: [{ type: "text", text }], ...(isError ? { isError } : {}) });
-
-async function callTool(request: Request, signal: AbortSignal) {
-  const params = request.params ?? {};
-  const role = ROLES.find((item) => item.tool === params.name);
-  if (role === undefined) return textResult(`[counterweight] 未知工具 ${params.name}`, true);
-  const meta = params._meta ?? {};
-  const cwd = meta["codex/sandbox-state"]?.sandboxCwd;
-  if (typeof cwd !== "string") return textResult("[counterweight] 请求里没有 sandboxCwd，无法确定仓库根。", true);
-  const dir = await realpathOr(cwd.startsWith("file://") ? fileURLToPath(cwd) : cwd);
-  const repo = await realpathOr(await repoToplevel(dir) ?? dir);
-  let project;
-  try {
-    project = await loadProjectConfig(repo, "codex.toml");
-  } catch (error) {
-    return textResult(`[counterweight] 配置非法，${role.tool} 不可用：${message(error)}`, true);
-  }
-  if (project === null) return textResult(`[counterweight] 未配置 [models].${role.name}，${role.tool} 不可用。`);
-  return textResult(await callRole({
-    repo,
-    session: typeof meta.sessionId === "string" ? meta.sessionId : "",
-    project,
-    runner: runRole,
-  }, role, params.arguments ?? {}, signal));
-}
-
-function handle(request: Request): void {
-  const { id, method } = request;
-  if (id === undefined) {
-    if (method === "notifications/cancelled" && request.params?.requestId !== undefined) {
-      pending.get(JSON.stringify(request.params.requestId))?.abort();
-    }
-    return;
-  }
-  switch (method) {
-    case "initialize":
-      reply(id, {
-        protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
-        capabilities: { tools: {}, experimental: { "codex/sandbox-state": {} } },
-        serverInfo: { name: "counterweight", version: "0.2.0" },
-      });
-      return;
-    case "ping": reply(id, {}); return;
-    case "tools/list": reply(id, { tools: TOOLS }); return;
-    case "tools/call": {
-      const key = JSON.stringify(id);
-      const controller = new AbortController();
-      pending.set(key, controller);
-      const work = callTool(request, controller.signal)
-        .then((result) => reply(id, result), (error: unknown) => reply(id, textResult(`[counterweight] ${message(error)}`, true)))
-        .finally(() => { pending.delete(key); inflight.delete(work); });
-      inflight.add(work);
-      return;
-    }
-    default: send({ id, error: { code: -32601, message: `method not found: ${method}` } });
-  }
-}
-
-const lines = createInterface({ input: process.stdin });
-lines.on("line", (line) => {
-  if (line.trim() === "") return;
-  try {
-    handle(JSON.parse(line) as Request);
-  } catch (error) {
-    process.stderr.write(`[counterweight] ${message(error)}\n`);
-  }
-});
-// stdin 关闭就是 Codex 走了：终止所有角色子进程，等它们的进程组回收完再退出。
-lines.on("close", () => {
-  for (const controller of pending.values()) controller.abort();
-  void Promise.allSettled([...inflight]).then(() => process.exit(0));
+serveMcp({
+  hostFile: "codex.toml",
+  runner: runRole,
+  experimental: { "codex/sandbox-state": {} },
+  locate(meta) {
+    const cwd = meta["codex/sandbox-state"]?.sandboxCwd;
+    if (typeof cwd !== "string") return null;
+    return {
+      cwd: cwd.startsWith("file://") ? fileURLToPath(cwd) : cwd,
+      session: typeof meta.sessionId === "string" ? meta.sessionId : "",
+    };
+  },
 });

@@ -27,8 +27,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/adapters/codex/mcp.ts
-var import_node_readline = require("node:readline");
 var import_node_url = require("node:url");
+
+// src/adapters/mcp.ts
+var import_node_readline = require("node:readline");
 
 // src/core/config.ts
 var import_promises2 = require("node:fs/promises");
@@ -36,15 +38,15 @@ var import_node_path2 = __toESM(require("node:path"), 1);
 
 // node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string2, ptr) {
-  let lines2 = string2.slice(0, ptr).split(/\r?\n/);
-  return [lines2.length, lines2.pop().length + 1];
+  let lines = string2.slice(0, ptr).split(/\r?\n/);
+  return [lines.length, lines.pop().length + 1];
 }
 function makeCodeBlock(string2, line, column) {
-  let lines2 = string2.split(/\r?\n/);
+  let lines = string2.split(/\r?\n/);
   let codeblock = "";
   let numberLen = (Math.log10(line + 1) | 0) + 1;
   for (let i = line - 1; i <= line + 1; i++) {
-    let l = lines2[i - 1];
+    let l = lines[i - 1];
     if (!l)
       continue;
     codeblock += i.toString().padEnd(numberLen, " ");
@@ -8502,20 +8504,397 @@ function nextTimeoutS(usedMs) {
   return Math.min(MAX_TIMEOUT_S, used * 2);
 }
 
-// src/adapters/codex/runner.ts
-var import_promises4 = require("node:fs/promises");
-var import_node_os = require("node:os");
+// src/roles/tools.ts
+var import_promises5 = require("node:fs/promises");
+var import_node_path5 = __toESM(require("node:path"), 1);
+
+// src/core/cwfile.ts
+var import_promises3 = require("node:fs/promises");
 var import_node_path3 = __toESM(require("node:path"), 1);
+async function writeCwFile(repo, name, content) {
+  const dir = import_node_path3.default.join(repo, ".cw");
+  await (0, import_promises3.mkdir)(dir, { recursive: true });
+  const stat = await (0, import_promises3.lstat)(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
+  }
+  const target = import_node_path3.default.join(dir, name);
+  const temp = `${target}.${process.pid}.tmp`;
+  await (0, import_promises3.writeFile)(temp, content);
+  await (0, import_promises3.rename)(temp, target);
+  return target;
+}
+
+// src/core/meter.ts
+var import_node_fs = require("node:fs");
+var import_promises4 = require("node:fs/promises");
+var import_node_path4 = __toESM(require("node:path"), 1);
+var APPEND_FLAGS = import_node_fs.constants.O_APPEND | import_node_fs.constants.O_CREAT | import_node_fs.constants.O_WRONLY | import_node_fs.constants.O_NOFOLLOW;
+async function appendMeterLine(repo, record) {
+  const dir = import_node_path4.default.join(repo, ".cw");
+  await (0, import_promises4.mkdir)(dir, { recursive: true });
+  const stat = await (0, import_promises4.lstat)(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165\u8BA1\u91CF");
+  }
+  const handle = await (0, import_promises4.open)(import_node_path4.default.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
+  try {
+    await handle.writeFile(`${JSON.stringify(record)}
+`);
+  } finally {
+    await handle.close();
+  }
+}
+async function recordUsage(repo, record) {
+  await appendMeterLine(repo, { ...record, kind: "usage" });
+}
+async function recordEvent(repo, session, event, detail = {}) {
+  try {
+    const record = {
+      kind: "event",
+      time: (/* @__PURE__ */ new Date()).toISOString(),
+      session,
+      event,
+      detail
+    };
+    await appendMeterLine(repo, record);
+  } catch {
+  }
+}
+
+// src/core/router.ts
+var QUESTIONS = {
+  review: "\u8FD9\u6B21\u6539\u52A8\u662F\u5426\u5B58\u5728\u884C\u4E3A\u9519\u8BEF\uFF1A\u903B\u8F91\u9519\u8BEF\u3001\u88AB\u524A\u5F31\u7684\u6821\u9A8C\u6216\u9519\u8BEF\u5904\u7406\u3001\u6CA1\u6709\u540C\u6B65\u66F4\u65B0\u7684\u8C03\u7528\u65B9",
+  over_review: "\u8FD9\u6B21\u6539\u52A8\u662F\u5426\u5305\u542B\u6CA1\u6709\u5F53\u524D\u9700\u6C42\u652F\u6491\u7684\u62BD\u8C61\u3001\u515C\u5E95\u5206\u652F\u3001\u914D\u7F6E\u9879\u3001\u517C\u5BB9\u5C42\u6216\u591A\u4F59\u7684\u6D4B\u8BD5"
+};
+async function gate(router, role, state, signal, random = Math.random) {
+  const started = Date.now();
+  const done = (v) => ({ ...v, ms: Date.now() - started });
+  try {
+    const headers = { "content-type": "application/json" };
+    if (router.api_key_env !== null) {
+      const key = process.env[router.api_key_env];
+      if (key === void 0 || key === "") throw new Error(`\u73AF\u5883\u53D8\u91CF ${router.api_key_env} \u4E3A\u7A7A`);
+      headers.authorization = `Bearer ${key}`;
+    }
+    const timeout = AbortSignal.timeout(router.timeout_ms);
+    const response = await fetch(router.url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: router.model,
+        state,
+        questions: { problem: { type: "noul", instructions: QUESTIONS[role] } }
+      }),
+      signal: signal === void 0 ? timeout : AbortSignal.any([signal, timeout])
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = await response.json();
+    const p = payload.answers?.problem?.noul;
+    if (typeof p !== "number" || !(p >= 0 && p <= 1)) throw new Error("\u54CD\u5E94\u91CC\u6CA1\u6709 0..1 \u7684 noul");
+    if (p > router.skip_below) return done({ skip: false, p, audited: false, error: null });
+    const audited = random() < router.audit_rate;
+    return done({ skip: !audited, p, audited, error: null });
+  } catch (error) {
+    return done({ skip: false, p: null, audited: false, error: error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF" });
+  }
+}
+
+// src/roles/tools.ts
+function timeoutAdvice(tool, usedMs) {
+  const next = nextTimeoutS(usedMs);
+  return next === null ? `\u5DF2\u7ECF\u7528\u6EE1 ${MAX_TIMEOUT_S} \u79D2\u4E0A\u9650\uFF0C\u518D\u52A0\u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\uFF08\u5206\u6587\u4EF6\u3001\u5206\u63D0\u4EA4\uFF09\u540E\u518D\u8C03\u7528 ${tool}\u3002` : `\u4E0B\u4E00\u6863\uFF1A\u7528 timeout_s=${next} \u91CD\u65B0\u8C03\u7528 ${tool}\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF0C\u4E0A\u9650 ${MAX_TIMEOUT_S}\uFF09\u3002`;
+}
+var ROLES = [
+  {
+    name: "explorer",
+    tool: "cw_explore",
+    description: "\u628A\u4E00\u4E2A\u4EE3\u7801\u95EE\u9898\u4EA4\u7ED9\u53EA\u8BFB\u63A2\u7D22\u8005\u3002\u5B83\u53EA\u80FD\u8BFB\u548C\u641C\uFF0C\u8FD4\u56DE\u5E26\u6765\u6E90\u7684\u7ED3\u8BBA\u3002\u4E0D\u505A\u4FEE\u6539\u3002",
+    input: "question"
+  },
+  {
+    name: "review",
+    tool: "cw_review",
+    description: "\u628A\u8FD9\u6B21\u7684\u8981\u6C42\u548C diff \u4EA4\u7ED9\u53EA\u8BFB\u5BA1\u67E5\u3002\u5B83\u53EA\u62A5\u884C\u4E3A\u9519\u8BEF\u548C\u88AB\u524A\u5F31\u7684\u771F\u5B9E\u8FB9\u754C\uFF0C\u4E0D\u62A5\u7F3A\u6D4B\u8BD5\u3001\u4E0D\u63D0\u91CD\u6784\u3001\u4E0D\u6539\u6587\u4EF6\u3002\u4FE1\u606F\u4E0D\u591F\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u8865\u5145\u5230 request \u540E\u91CD\u65B0\u8C03\u7528\u3002",
+    input: "review"
+  },
+  {
+    name: "over_review",
+    tool: "cw_over_review",
+    description: "\u628A\u8FD9\u6B21\u7684\u8981\u6C42\u548C diff \u4EA4\u7ED9\u53EA\u8BFB\u5BA1\u67E5\u3002\u5B83\u53EA\u62A5\u6CA1\u8D44\u683C\u7559\u4E0B\u7684\u62BD\u8C61\u3001\u515C\u5E95\u3001\u591A\u4F59\u6D4B\u8BD5\u548C\u9632\u5FA1\u6027\u5206\u652F\uFF0C\u4E0D\u8BC4\u5BF9\u9519\u3001\u4E0D\u6539\u6587\u4EF6\u3002\u4FE1\u606F\u4E0D\u591F\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u8865\u5145\u5230 request \u540E\u91CD\u65B0\u8C03\u7528\u3002",
+    input: "review"
+  },
+  {
+    name: "research",
+    tool: "cw_research",
+    description: "\u628A\u4E3B\u6A21\u578B\u8BFB\u4EE3\u7801\u4ECD\u5B9A\u4E0D\u4E0B\u6765\u7684\u95EE\u9898\u4EA4\u7ED9\u53EA\u8BFB\u7814\u7A76\u89D2\u8272\u3002\u7ED3\u8BBA\u5728\u524D\uFF0C\u6CA1\u8BFB\u5230\u7684\u6807\u672A\u6838\u5B9E\u3002\u4E0D\u5B9E\u73B0\u3002",
+    input: "question"
+  },
+  {
+    name: "historian",
+    tool: "cw_chronicle",
+    description: "\u628A\u9636\u6BB5\u6027\u6210\u679C\u6C47\u62A5\u7ED9\u53F2\u5B98\uFF08\u63D0\u4EA4\u3001\u51B3\u5B9A\u3001\u5B50 agent \u7684\u53D1\u73B0\uFF09\uFF0C\u5B83\u91CD\u5199 .cw/HISTORY.md\u3002\u5199\u4E0D\u4E0B\u53BB\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u7531\u4F60\u56DE\u7B54\u540E\u518D\u6C47\u62A5\u3002",
+    input: "report"
+  }
+];
+var TIMEOUT_DESCRIPTION = `\u672C\u6B21\u8C03\u7528\u7684\u8D85\u65F6\u79D2\u6570\uFF08${MIN_TIMEOUT_S}\u2013${MAX_TIMEOUT_S}\uFF0C\u8D8A\u754C\u4F1A\u88AB\u5939\u4F4F\uFF09\u3002\u6309\u8F93\u5165\u5927\u5C0F\u4F30\uFF1A\u5C0F\u8F93\u5165\u4E0D\u4F20\uFF0C\u7528\u9ED8\u8BA4 ${MIN_TIMEOUT_S}\uFF1B\u660E\u663E\u5F88\u5927\uFF08\u957F diff\u3001\u8DE8\u5F88\u591A\u6587\u4EF6\uFF09\u5C31\u5148\u8BBE\u957F\u4E00\u4E9B\u3002\u8D85\u65F6\u540E\u8FD4\u56DE\u91CC\u4F1A\u7ED9\u4E0B\u4E00\u6863\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF09\uFF0C\u7167\u7740\u91CD\u8BD5\uFF1B\u5DF2\u5230 ${MAX_TIMEOUT_S} \u8FD8\u8D85\u65F6\u5C31\u62C6\u5C0F\u8F93\u5165\uFF0C\u522B\u518D\u52A0\u3002`;
+var HISTORY_FILE = "HISTORY.md";
+async function callRole(ctx, role, params, signal) {
+  const model = ctx.project.models[role.name];
+  if (model === null) return `[counterweight] \u672A\u914D\u7F6E [models].${role.name}\uFF0C${role.tool} \u4E0D\u53EF\u7528\u3002`;
+  const askedS = clampTimeoutS(params.timeout_s);
+  if (role.input === "report") return await chronicle(ctx, model, params.report, signal, askedS);
+  const message2 = role.input === "question" ? params.question : reviewMessage({ request: params.request, diff: params.diff });
+  const router = ctx.project.router;
+  if (router !== null && (role.name === "review" || role.name === "over_review")) {
+    const verdict = await gate(router, role.name, message2, signal);
+    await recordEvent(ctx.repo, ctx.session, "gate", {
+      role: role.name,
+      model: router.model,
+      p: verdict.p,
+      skipped: verdict.skip,
+      audited: verdict.audited,
+      error: verdict.error,
+      ms: verdict.ms
+    }).catch(() => {
+    });
+    if (verdict.skip) {
+      return `[counterweight] ${role.tool}\uFF08\u9884\u5224\u653E\u884C\uFF1A${router.model} \u5224\u6709\u95EE\u9898\u7684\u6982\u7387 ${verdict.p} \u2264 ${router.skip_below}\uFF0C\u672A\u8D77\u5BA1\u67E5\u6A21\u578B\uFF09\uFF1A
+none`;
+    }
+  }
+  const run = await runAndMeter(ctx, role.name, role.tool, model, message2, signal, askedS);
+  const asking = role.input === "review" && run.answer?.trim().startsWith("ASK:");
+  return asking ? `${run.text}
+\u5BA1\u67E5\u8005\u9700\u8981\u8865\u5145\u4FE1\u606F\uFF1A\u56DE\u7B54\u4E0A\u9762\u7684\u95EE\u9898\uFF0C\u628A\u7B54\u6848\u5199\u8FDB request\uFF0C\u518D\u8C03\u7528 ${role.tool} \u4E00\u6B21\u3002` : run.text;
+}
+function reviewMessage(params) {
+  return `\u8981\u6C42\uFF1A
+${params.request}
+
+diff\uFF1A
+${params.diff}
+`;
+}
+async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
+  const { repo, session } = ctx;
+  const started = Date.now();
+  const configured = ctx.project.timeouts[role];
+  const timeoutMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
+  const run = await ctx.runner({
+    role,
+    workRoot: repo,
+    model,
+    sandbox: ctx.project.sandbox,
+    message: message2,
+    signal,
+    timeoutMs
+  });
+  let spent = 0;
+  let meterError = null;
+  for (const sample of run.usage) {
+    try {
+      await recordUsage(repo, {
+        time: (/* @__PURE__ */ new Date()).toISOString(),
+        session,
+        model,
+        input: sample.input,
+        output: sample.output,
+        cache_read: sample.cacheRead,
+        cache_write: sample.cacheWrite,
+        cost_total: sample.costTotal ?? null
+      });
+    } catch (error) {
+      meterError ??= error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF";
+    }
+    spent += sample.input + sample.output + sample.cacheRead + sample.cacheWrite;
+  }
+  const meterNote = meterError === null ? "" : `\uFF1B\u7528\u91CF\u672A\u80FD\u5199\u5165\u8BA1\u91CF\uFF08${meterError}\uFF09`;
+  if (run.error !== null) {
+    await recordEvent(repo, session, role, {
+      outcome: "failed",
+      error: run.error,
+      tokens: spent,
+      ms: Date.now() - started,
+      timed_out: run.timedOut,
+      cancelled: run.cancelled
+    }).catch(() => {
+    });
+    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timeoutAdvice(tool, timeoutMs) : ""}` };
+  }
+  const head = run.answer.trim();
+  const result = head === "none" ? "none" : head.startsWith("ASK:") ? "ask" : "answer";
+  await recordEvent(repo, session, role, {
+    outcome: "answered",
+    result,
+    tokens: spent,
+    ms: Date.now() - started,
+    timed_out: false
+  }).catch(() => {
+  });
+  return {
+    answer: run.answer,
+    text: `[counterweight] ${tool}\uFF08\u6A21\u578B ${model}\uFF0C\u6D88\u8017 ${spent} token${meterNote}\uFF09\uFF1A
+${run.answer}`
+  };
+}
+async function readHistory(repo) {
+  try {
+    return await (0, import_promises5.readFile)(import_node_path5.default.join(repo, ".cw", HISTORY_FILE), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  }
+}
+async function chronicle(ctx, model, report, signal, askedS) {
+  let current;
+  try {
+    current = await readHistory(ctx.repo);
+  } catch (error) {
+    return `[counterweight] cw_chronicle \u8BFB\u4E0D\u4E86 .cw/${HISTORY_FILE}\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
+  }
+  const message2 = `\u5F53\u524D\u6587\u6863\uFF1A
+${current === "" ? "\uFF08\u7A7A\uFF09" : current}
+
+\u6C47\u62A5\uFF1A
+${report}
+`;
+  const { text: note, answer } = await runAndMeter(ctx, "historian", "cw_chronicle", model, message2, signal, askedS);
+  if (answer === null) return note;
+  const body = answer.trim();
+  if (body.startsWith("ASK:")) return `${note}
+\u53F2\u5B98\u9700\u8981\u4F60\u534F\u8C03\u540E\u518D\u6C47\u62A5\uFF0C\u6587\u6863\u672A\u6539\u52A8\u3002`;
+  if (!body.startsWith("# ")) return `[counterweight] cw_chronicle \u53F2\u5B98\u6CA1\u6709\u8FD4\u56DE\u6574\u4EFD\u6587\u6863\uFF08\u9996\u884C\u4E0D\u662F # \u6807\u9898\uFF09\uFF0C\u6587\u6863\u672A\u6539\u52A8\uFF1A
+${body.slice(0, 200)}`;
+  try {
+    if (await readHistory(ctx.repo) !== current) {
+      return `[counterweight] cw_chronicle \u6587\u6863\u5728\u6B64\u671F\u95F4\u88AB\u6539\u52A8\uFF0C\u672A\u5199\u5165\uFF0C\u8BF7\u91CD\u65B0\u6C47\u62A5\u3002`;
+    }
+    await writeCwFile(ctx.repo, HISTORY_FILE, `${body}
+`);
+  } catch (error) {
+    return `[counterweight] cw_chronicle \u5199\u5165\u5931\u8D25\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
+  }
+  return `[counterweight] cw_chronicle \u5DF2\u66F4\u65B0 .cw/${HISTORY_FILE}\u3002`;
+}
+
+// src/adapters/mcp.ts
+var message = (error) => error instanceof Error ? error.message : String(error);
+var timeoutField = { type: "integer", minimum: MIN_TIMEOUT_S, maximum: MAX_TIMEOUT_S, description: TIMEOUT_DESCRIPTION };
+var string = { type: "string", minLength: 1 };
+function inputSchema(input) {
+  const fields = input === "question" ? { question: string } : input === "report" ? { report: string } : { request: string, diff: string };
+  return {
+    type: "object",
+    properties: { ...fields, timeout_s: timeoutField },
+    required: Object.keys(fields),
+    additionalProperties: false
+  };
+}
+var TOOLS = ROLES.map((role) => ({
+  name: role.tool,
+  description: role.description,
+  inputSchema: inputSchema(role.input)
+}));
+var pending = /* @__PURE__ */ new Map();
+var inflight = /* @__PURE__ */ new Set();
+var send = (payload) => {
+  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...payload })}
+`);
+};
+var reply = (id, result) => send({ id, result });
+var textResult = (text, isError = false) => ({ content: [{ type: "text", text }], ...isError ? { isError } : {} });
+function serveMcp(host) {
+  async function callTool(request, signal) {
+    const params = request.params ?? {};
+    const role = ROLES.find((item) => item.tool === params.name);
+    if (role === void 0) return textResult(`[counterweight] \u672A\u77E5\u5DE5\u5177 ${params.name}`, true);
+    const meta = params._meta ?? {};
+    const where = host.locate(meta);
+    if (where === null) return textResult("[counterweight] \u8BF7\u6C42\u91CC\u6CA1\u6709\u5DE5\u4F5C\u76EE\u5F55\uFF0C\u65E0\u6CD5\u786E\u5B9A\u4ED3\u5E93\u6839\u3002", true);
+    const dir = await realpathOr(where.cwd);
+    const repo = await realpathOr(await repoToplevel(dir) ?? dir);
+    let project;
+    try {
+      project = await loadProjectConfig(repo, host.hostFile);
+    } catch (error) {
+      return textResult(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C${role.tool} \u4E0D\u53EF\u7528\uFF1A${message(error)}`, true);
+    }
+    if (project === null) return textResult(`[counterweight] \u672A\u914D\u7F6E [models].${role.name}\uFF0C${role.tool} \u4E0D\u53EF\u7528\u3002`);
+    return textResult(await callRole({
+      repo,
+      session: where.session,
+      project,
+      runner: host.runner
+    }, role, params.arguments ?? {}, signal));
+  }
+  function handle(request) {
+    const { id, method } = request;
+    if (id === void 0) {
+      if (method === "notifications/cancelled" && request.params?.requestId !== void 0) {
+        pending.get(JSON.stringify(request.params.requestId))?.abort();
+      }
+      return;
+    }
+    switch (method) {
+      case "initialize":
+        reply(id, {
+          protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
+          capabilities: { tools: {}, ...host.experimental === void 0 ? {} : { experimental: host.experimental } },
+          serverInfo: { name: "counterweight", version: "0.2.0" }
+        });
+        return;
+      case "ping":
+        reply(id, {});
+        return;
+      case "tools/list":
+        reply(id, { tools: TOOLS });
+        return;
+      case "tools/call": {
+        const key = JSON.stringify(id);
+        const controller = new AbortController();
+        pending.set(key, controller);
+        const work = callTool(request, controller.signal).then((result) => reply(id, result), (error) => reply(id, textResult(`[counterweight] ${message(error)}`, true))).finally(() => {
+          pending.delete(key);
+          inflight.delete(work);
+        });
+        inflight.add(work);
+        return;
+      }
+      default:
+        send({ id, error: { code: -32601, message: `method not found: ${method}` } });
+    }
+  }
+  const lines = (0, import_node_readline.createInterface)({ input: process.stdin });
+  lines.on("line", (line) => {
+    if (line.trim() === "") return;
+    try {
+      handle(JSON.parse(line));
+    } catch (error) {
+      process.stderr.write(`[counterweight] ${message(error)}
+`);
+    }
+  });
+  lines.on("close", () => {
+    for (const controller of pending.values()) controller.abort();
+    void Promise.allSettled([...inflight]).then(() => process.exit(0));
+  });
+}
+
+// src/adapters/codex/runner.ts
+var import_promises7 = require("node:fs/promises");
+var import_node_os = require("node:os");
+var import_node_path6 = __toESM(require("node:path"), 1);
 
 // src/core/process.ts
 var import_node_child_process2 = require("node:child_process");
-var import_promises3 = require("node:fs/promises");
+var import_promises6 = require("node:fs/promises");
 var KILL_GRACE_MS = 5e3;
 var GROUP_POLL_MS = 50;
 async function runProcess(options) {
-  const stdout = await (0, import_promises3.open)(options.stdoutPath, "wx");
-  const stderr = await (0, import_promises3.open)(options.stderrPath, "wx");
-  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises3.open)(options.stdinPath, "r");
+  const stdout = await (0, import_promises6.open)(options.stdoutPath, "wx");
+  const stderr = await (0, import_promises6.open)(options.stderrPath, "wx");
+  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises6.open)(options.stdinPath, "r");
   const abort = linkAbort(options.signal, options.timeoutMs);
   let child;
   let watch;
@@ -8733,24 +9112,24 @@ function roleArgs(request) {
   ];
 }
 async function runRole(request) {
-  const scratch = await (0, import_promises4.mkdtemp)(import_node_path3.default.join((0, import_node_os.tmpdir)(), "cw-role-"));
+  const scratch = await (0, import_promises7.mkdtemp)(import_node_path6.default.join((0, import_node_os.tmpdir)(), "cw-role-"));
   try {
-    const messagePath = import_node_path3.default.join(scratch, "message.md");
-    await (0, import_promises4.writeFile)(messagePath, request.message);
+    const messagePath = import_node_path6.default.join(scratch, "message.md");
+    await (0, import_promises7.writeFile)(messagePath, request.message);
     const outcome = await runProcess({
       cwd: request.workRoot,
       cmd: ["codex", ...roleArgs(request)],
       env: { ...process.env },
       timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
-      stdoutPath: import_node_path3.default.join(scratch, "stdout.jsonl"),
-      stderrPath: import_node_path3.default.join(scratch, "stderr.log"),
+      stdoutPath: import_node_path6.default.join(scratch, "stdout.jsonl"),
+      stderrPath: import_node_path6.default.join(scratch, "stderr.log"),
       stdinPath: messagePath,
       signal: request.signal
     });
     try {
       let stdout = "";
       try {
-        stdout = await (0, import_promises4.readFile)(import_node_path3.default.join(scratch, "stdout.jsonl"), "utf8");
+        stdout = await (0, import_promises7.readFile)(import_node_path6.default.join(scratch, "stdout.jsonl"), "utf8");
       } catch (error) {
         return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
       }
@@ -8760,7 +9139,7 @@ async function runRole(request) {
       if (outcome.timedOut) return failure("\u8D85\u65F6\uFF0C\u5B50\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62");
       if (outcome.runnerError !== null) return failure(`\u65E0\u6CD5\u542F\u52A8 codex\uFF1A${outcome.runnerError}`);
       if (!events.completed) {
-        const stderr = await (0, import_promises4.readFile)(import_node_path3.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
+        const stderr = await (0, import_promises7.readFile)(import_node_path6.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
         const detail = events.failure ?? stderr.trim().split("\n").pop()?.slice(0, 300) ?? "";
         return failure(`\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u9000\u51FA\u7801 ${outcome.exitCode}${detail === "" ? "" : `\uFF1A${detail}`}\uFF09`);
       }
@@ -8771,7 +9150,7 @@ async function runRole(request) {
       outcome.dispose();
     }
   } finally {
-    await (0, import_promises4.rm)(scratch, { recursive: true, force: true });
+    await (0, import_promises7.rm)(scratch, { recursive: true, force: true });
   }
 }
 function parseEvents(stdout) {
@@ -8811,379 +9190,19 @@ function textOf(error) {
   return error instanceof Error ? error.message : "unreadable";
 }
 
-// src/roles/tools.ts
-var import_promises7 = require("node:fs/promises");
-var import_node_path6 = __toESM(require("node:path"), 1);
-
-// src/core/cwfile.ts
-var import_promises5 = require("node:fs/promises");
-var import_node_path4 = __toESM(require("node:path"), 1);
-async function writeCwFile(repo, name, content) {
-  const dir = import_node_path4.default.join(repo, ".cw");
-  await (0, import_promises5.mkdir)(dir, { recursive: true });
-  const stat = await (0, import_promises5.lstat)(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
-  }
-  const target = import_node_path4.default.join(dir, name);
-  const temp = `${target}.${process.pid}.tmp`;
-  await (0, import_promises5.writeFile)(temp, content);
-  await (0, import_promises5.rename)(temp, target);
-  return target;
-}
-
-// src/core/meter.ts
-var import_node_fs = require("node:fs");
-var import_promises6 = require("node:fs/promises");
-var import_node_path5 = __toESM(require("node:path"), 1);
-var APPEND_FLAGS = import_node_fs.constants.O_APPEND | import_node_fs.constants.O_CREAT | import_node_fs.constants.O_WRONLY | import_node_fs.constants.O_NOFOLLOW;
-async function appendMeterLine(repo, record) {
-  const dir = import_node_path5.default.join(repo, ".cw");
-  await (0, import_promises6.mkdir)(dir, { recursive: true });
-  const stat = await (0, import_promises6.lstat)(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165\u8BA1\u91CF");
-  }
-  const handle2 = await (0, import_promises6.open)(import_node_path5.default.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
-  try {
-    await handle2.writeFile(`${JSON.stringify(record)}
-`);
-  } finally {
-    await handle2.close();
-  }
-}
-async function recordUsage(repo, record) {
-  await appendMeterLine(repo, { ...record, kind: "usage" });
-}
-async function recordEvent(repo, session, event, detail = {}) {
-  try {
-    const record = {
-      kind: "event",
-      time: (/* @__PURE__ */ new Date()).toISOString(),
-      session,
-      event,
-      detail
-    };
-    await appendMeterLine(repo, record);
-  } catch {
-  }
-}
-
-// src/core/router.ts
-var QUESTIONS = {
-  review: "\u8FD9\u6B21\u6539\u52A8\u662F\u5426\u5B58\u5728\u884C\u4E3A\u9519\u8BEF\uFF1A\u903B\u8F91\u9519\u8BEF\u3001\u88AB\u524A\u5F31\u7684\u6821\u9A8C\u6216\u9519\u8BEF\u5904\u7406\u3001\u6CA1\u6709\u540C\u6B65\u66F4\u65B0\u7684\u8C03\u7528\u65B9",
-  over_review: "\u8FD9\u6B21\u6539\u52A8\u662F\u5426\u5305\u542B\u6CA1\u6709\u5F53\u524D\u9700\u6C42\u652F\u6491\u7684\u62BD\u8C61\u3001\u515C\u5E95\u5206\u652F\u3001\u914D\u7F6E\u9879\u3001\u517C\u5BB9\u5C42\u6216\u591A\u4F59\u7684\u6D4B\u8BD5"
-};
-async function gate(router, role, state, signal, random = Math.random) {
-  const started = Date.now();
-  const done = (v) => ({ ...v, ms: Date.now() - started });
-  try {
-    const headers = { "content-type": "application/json" };
-    if (router.api_key_env !== null) {
-      const key = process.env[router.api_key_env];
-      if (key === void 0 || key === "") throw new Error(`\u73AF\u5883\u53D8\u91CF ${router.api_key_env} \u4E3A\u7A7A`);
-      headers.authorization = `Bearer ${key}`;
-    }
-    const timeout = AbortSignal.timeout(router.timeout_ms);
-    const response = await fetch(router.url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        model: router.model,
-        state,
-        questions: { problem: { type: "noul", instructions: QUESTIONS[role] } }
-      }),
-      signal: signal === void 0 ? timeout : AbortSignal.any([signal, timeout])
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = await response.json();
-    const p = payload.answers?.problem?.noul;
-    if (typeof p !== "number" || !(p >= 0 && p <= 1)) throw new Error("\u54CD\u5E94\u91CC\u6CA1\u6709 0..1 \u7684 noul");
-    if (p > router.skip_below) return done({ skip: false, p, audited: false, error: null });
-    const audited = random() < router.audit_rate;
-    return done({ skip: !audited, p, audited, error: null });
-  } catch (error) {
-    return done({ skip: false, p: null, audited: false, error: error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF" });
-  }
-}
-
-// src/roles/tools.ts
-function timeoutAdvice(tool, usedMs) {
-  const next = nextTimeoutS(usedMs);
-  return next === null ? `\u5DF2\u7ECF\u7528\u6EE1 ${MAX_TIMEOUT_S} \u79D2\u4E0A\u9650\uFF0C\u518D\u52A0\u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\uFF08\u5206\u6587\u4EF6\u3001\u5206\u63D0\u4EA4\uFF09\u540E\u518D\u8C03\u7528 ${tool}\u3002` : `\u4E0B\u4E00\u6863\uFF1A\u7528 timeout_s=${next} \u91CD\u65B0\u8C03\u7528 ${tool}\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF0C\u4E0A\u9650 ${MAX_TIMEOUT_S}\uFF09\u3002`;
-}
-var ROLES = [
-  {
-    name: "explorer",
-    tool: "cw_explore",
-    description: "\u628A\u4E00\u4E2A\u4EE3\u7801\u95EE\u9898\u4EA4\u7ED9\u53EA\u8BFB\u63A2\u7D22\u8005\u3002\u5B83\u53EA\u80FD\u8BFB\u548C\u641C\uFF0C\u8FD4\u56DE\u5E26\u6765\u6E90\u7684\u7ED3\u8BBA\u3002\u4E0D\u505A\u4FEE\u6539\u3002",
-    input: "question"
-  },
-  {
-    name: "review",
-    tool: "cw_review",
-    description: "\u628A\u8FD9\u6B21\u7684\u8981\u6C42\u548C diff \u4EA4\u7ED9\u53EA\u8BFB\u5BA1\u67E5\u3002\u5B83\u53EA\u62A5\u884C\u4E3A\u9519\u8BEF\u548C\u88AB\u524A\u5F31\u7684\u771F\u5B9E\u8FB9\u754C\uFF0C\u4E0D\u62A5\u7F3A\u6D4B\u8BD5\u3001\u4E0D\u63D0\u91CD\u6784\u3001\u4E0D\u6539\u6587\u4EF6\u3002\u4FE1\u606F\u4E0D\u591F\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u8865\u5145\u5230 request \u540E\u91CD\u65B0\u8C03\u7528\u3002",
-    input: "review"
-  },
-  {
-    name: "over_review",
-    tool: "cw_over_review",
-    description: "\u628A\u8FD9\u6B21\u7684\u8981\u6C42\u548C diff \u4EA4\u7ED9\u53EA\u8BFB\u5BA1\u67E5\u3002\u5B83\u53EA\u62A5\u6CA1\u8D44\u683C\u7559\u4E0B\u7684\u62BD\u8C61\u3001\u515C\u5E95\u3001\u591A\u4F59\u6D4B\u8BD5\u548C\u9632\u5FA1\u6027\u5206\u652F\uFF0C\u4E0D\u8BC4\u5BF9\u9519\u3001\u4E0D\u6539\u6587\u4EF6\u3002\u4FE1\u606F\u4E0D\u591F\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u8865\u5145\u5230 request \u540E\u91CD\u65B0\u8C03\u7528\u3002",
-    input: "review"
-  },
-  {
-    name: "research",
-    tool: "cw_research",
-    description: "\u628A\u4E3B\u6A21\u578B\u8BFB\u4EE3\u7801\u4ECD\u5B9A\u4E0D\u4E0B\u6765\u7684\u95EE\u9898\u4EA4\u7ED9\u53EA\u8BFB\u7814\u7A76\u89D2\u8272\u3002\u7ED3\u8BBA\u5728\u524D\uFF0C\u6CA1\u8BFB\u5230\u7684\u6807\u672A\u6838\u5B9E\u3002\u4E0D\u5B9E\u73B0\u3002",
-    input: "question"
-  },
-  {
-    name: "historian",
-    tool: "cw_chronicle",
-    description: "\u628A\u9636\u6BB5\u6027\u6210\u679C\u6C47\u62A5\u7ED9\u53F2\u5B98\uFF08\u63D0\u4EA4\u3001\u51B3\u5B9A\u3001\u5B50 agent \u7684\u53D1\u73B0\uFF09\uFF0C\u5B83\u91CD\u5199 .cw/HISTORY.md\u3002\u5199\u4E0D\u4E0B\u53BB\u65F6\u8FD4\u56DE ASK \u5F00\u5934\u7684\u95EE\u9898\uFF0C\u7531\u4F60\u56DE\u7B54\u540E\u518D\u6C47\u62A5\u3002",
-    input: "report"
-  }
-];
-var TIMEOUT_DESCRIPTION = `\u672C\u6B21\u8C03\u7528\u7684\u8D85\u65F6\u79D2\u6570\uFF08${MIN_TIMEOUT_S}\u2013${MAX_TIMEOUT_S}\uFF0C\u8D8A\u754C\u4F1A\u88AB\u5939\u4F4F\uFF09\u3002\u6309\u8F93\u5165\u5927\u5C0F\u4F30\uFF1A\u5C0F\u8F93\u5165\u4E0D\u4F20\uFF0C\u7528\u9ED8\u8BA4 ${MIN_TIMEOUT_S}\uFF1B\u660E\u663E\u5F88\u5927\uFF08\u957F diff\u3001\u8DE8\u5F88\u591A\u6587\u4EF6\uFF09\u5C31\u5148\u8BBE\u957F\u4E00\u4E9B\u3002\u8D85\u65F6\u540E\u8FD4\u56DE\u91CC\u4F1A\u7ED9\u4E0B\u4E00\u6863\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF09\uFF0C\u7167\u7740\u91CD\u8BD5\uFF1B\u5DF2\u5230 ${MAX_TIMEOUT_S} \u8FD8\u8D85\u65F6\u5C31\u62C6\u5C0F\u8F93\u5165\uFF0C\u522B\u518D\u52A0\u3002`;
-var HISTORY_FILE = "HISTORY.md";
-async function callRole(ctx, role, params, signal) {
-  const model = ctx.project.models[role.name];
-  if (model === null) return `[counterweight] \u672A\u914D\u7F6E [models].${role.name}\uFF0C${role.tool} \u4E0D\u53EF\u7528\u3002`;
-  const askedS = clampTimeoutS(params.timeout_s);
-  if (role.input === "report") return await chronicle(ctx, model, params.report, signal, askedS);
-  const message2 = role.input === "question" ? params.question : reviewMessage({ request: params.request, diff: params.diff });
-  const router = ctx.project.router;
-  if (router !== null && (role.name === "review" || role.name === "over_review")) {
-    const verdict = await gate(router, role.name, message2, signal);
-    await recordEvent(ctx.repo, ctx.session, "gate", {
-      role: role.name,
-      model: router.model,
-      p: verdict.p,
-      skipped: verdict.skip,
-      audited: verdict.audited,
-      error: verdict.error,
-      ms: verdict.ms
-    }).catch(() => {
-    });
-    if (verdict.skip) {
-      return `[counterweight] ${role.tool}\uFF08\u9884\u5224\u653E\u884C\uFF1A${router.model} \u5224\u6709\u95EE\u9898\u7684\u6982\u7387 ${verdict.p} \u2264 ${router.skip_below}\uFF0C\u672A\u8D77\u5BA1\u67E5\u6A21\u578B\uFF09\uFF1A
-none`;
-    }
-  }
-  const run = await runAndMeter(ctx, role.name, role.tool, model, message2, signal, askedS);
-  const asking = role.input === "review" && run.answer?.trim().startsWith("ASK:");
-  return asking ? `${run.text}
-\u5BA1\u67E5\u8005\u9700\u8981\u8865\u5145\u4FE1\u606F\uFF1A\u56DE\u7B54\u4E0A\u9762\u7684\u95EE\u9898\uFF0C\u628A\u7B54\u6848\u5199\u8FDB request\uFF0C\u518D\u8C03\u7528 ${role.tool} \u4E00\u6B21\u3002` : run.text;
-}
-function reviewMessage(params) {
-  return `\u8981\u6C42\uFF1A
-${params.request}
-
-diff\uFF1A
-${params.diff}
-`;
-}
-async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
-  const { repo, session } = ctx;
-  const started = Date.now();
-  const configured = ctx.project.timeouts[role];
-  const timeoutMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
-  const run = await ctx.runner({
-    role,
-    workRoot: repo,
-    model,
-    sandbox: ctx.project.sandbox,
-    message: message2,
-    signal,
-    timeoutMs
-  });
-  let spent = 0;
-  let meterError = null;
-  for (const sample of run.usage) {
-    try {
-      await recordUsage(repo, {
-        time: (/* @__PURE__ */ new Date()).toISOString(),
-        session,
-        model,
-        input: sample.input,
-        output: sample.output,
-        cache_read: sample.cacheRead,
-        cache_write: sample.cacheWrite,
-        cost_total: sample.costTotal ?? null
-      });
-    } catch (error) {
-      meterError ??= error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF";
-    }
-    spent += sample.input + sample.output + sample.cacheRead + sample.cacheWrite;
-  }
-  const meterNote = meterError === null ? "" : `\uFF1B\u7528\u91CF\u672A\u80FD\u5199\u5165\u8BA1\u91CF\uFF08${meterError}\uFF09`;
-  if (run.error !== null) {
-    await recordEvent(repo, session, role, {
-      outcome: "failed",
-      error: run.error,
-      tokens: spent,
-      ms: Date.now() - started,
-      timed_out: run.timedOut,
-      cancelled: run.cancelled
-    }).catch(() => {
-    });
-    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timeoutAdvice(tool, timeoutMs) : ""}` };
-  }
-  const head = run.answer.trim();
-  const result = head === "none" ? "none" : head.startsWith("ASK:") ? "ask" : "answer";
-  await recordEvent(repo, session, role, {
-    outcome: "answered",
-    result,
-    tokens: spent,
-    ms: Date.now() - started,
-    timed_out: false
-  }).catch(() => {
-  });
-  return {
-    answer: run.answer,
-    text: `[counterweight] ${tool}\uFF08\u6A21\u578B ${model}\uFF0C\u6D88\u8017 ${spent} token${meterNote}\uFF09\uFF1A
-${run.answer}`
-  };
-}
-async function readHistory(repo) {
-  try {
-    return await (0, import_promises7.readFile)(import_node_path6.default.join(repo, ".cw", HISTORY_FILE), "utf8");
-  } catch (error) {
-    if (error.code === "ENOENT") return "";
-    throw error;
-  }
-}
-async function chronicle(ctx, model, report, signal, askedS) {
-  let current;
-  try {
-    current = await readHistory(ctx.repo);
-  } catch (error) {
-    return `[counterweight] cw_chronicle \u8BFB\u4E0D\u4E86 .cw/${HISTORY_FILE}\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
-  }
-  const message2 = `\u5F53\u524D\u6587\u6863\uFF1A
-${current === "" ? "\uFF08\u7A7A\uFF09" : current}
-
-\u6C47\u62A5\uFF1A
-${report}
-`;
-  const { text: note, answer } = await runAndMeter(ctx, "historian", "cw_chronicle", model, message2, signal, askedS);
-  if (answer === null) return note;
-  const body = answer.trim();
-  if (body.startsWith("ASK:")) return `${note}
-\u53F2\u5B98\u9700\u8981\u4F60\u534F\u8C03\u540E\u518D\u6C47\u62A5\uFF0C\u6587\u6863\u672A\u6539\u52A8\u3002`;
-  if (!body.startsWith("# ")) return `[counterweight] cw_chronicle \u53F2\u5B98\u6CA1\u6709\u8FD4\u56DE\u6574\u4EFD\u6587\u6863\uFF08\u9996\u884C\u4E0D\u662F # \u6807\u9898\uFF09\uFF0C\u6587\u6863\u672A\u6539\u52A8\uFF1A
-${body.slice(0, 200)}`;
-  try {
-    if (await readHistory(ctx.repo) !== current) {
-      return `[counterweight] cw_chronicle \u6587\u6863\u5728\u6B64\u671F\u95F4\u88AB\u6539\u52A8\uFF0C\u672A\u5199\u5165\uFF0C\u8BF7\u91CD\u65B0\u6C47\u62A5\u3002`;
-    }
-    await writeCwFile(ctx.repo, HISTORY_FILE, `${body}
-`);
-  } catch (error) {
-    return `[counterweight] cw_chronicle \u5199\u5165\u5931\u8D25\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
-  }
-  return `[counterweight] cw_chronicle \u5DF2\u66F4\u65B0 .cw/${HISTORY_FILE}\u3002`;
-}
-
 // src/adapters/codex/mcp.ts
-var message = (error) => error instanceof Error ? error.message : String(error);
-var timeoutField = { type: "integer", minimum: MIN_TIMEOUT_S, maximum: MAX_TIMEOUT_S, description: TIMEOUT_DESCRIPTION };
-var string = { type: "string", minLength: 1 };
-function inputSchema(input) {
-  const fields = input === "question" ? { question: string } : input === "report" ? { report: string } : { request: string, diff: string };
-  return {
-    type: "object",
-    properties: { ...fields, timeout_s: timeoutField },
-    required: Object.keys(fields),
-    additionalProperties: false
-  };
-}
-var TOOLS = ROLES.map((role) => ({
-  name: role.tool,
-  description: role.description,
-  inputSchema: inputSchema(role.input)
-}));
-var pending = /* @__PURE__ */ new Map();
-var inflight = /* @__PURE__ */ new Set();
-var send = (payload) => {
-  process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", ...payload })}
-`);
-};
-var reply = (id, result) => send({ id, result });
-var textResult = (text, isError = false) => ({ content: [{ type: "text", text }], ...isError ? { isError } : {} });
-async function callTool(request, signal) {
-  const params = request.params ?? {};
-  const role = ROLES.find((item) => item.tool === params.name);
-  if (role === void 0) return textResult(`[counterweight] \u672A\u77E5\u5DE5\u5177 ${params.name}`, true);
-  const meta = params._meta ?? {};
-  const cwd = meta["codex/sandbox-state"]?.sandboxCwd;
-  if (typeof cwd !== "string") return textResult("[counterweight] \u8BF7\u6C42\u91CC\u6CA1\u6709 sandboxCwd\uFF0C\u65E0\u6CD5\u786E\u5B9A\u4ED3\u5E93\u6839\u3002", true);
-  const dir = await realpathOr(cwd.startsWith("file://") ? (0, import_node_url.fileURLToPath)(cwd) : cwd);
-  const repo = await realpathOr(await repoToplevel(dir) ?? dir);
-  let project;
-  try {
-    project = await loadProjectConfig(repo, "codex.toml");
-  } catch (error) {
-    return textResult(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C${role.tool} \u4E0D\u53EF\u7528\uFF1A${message(error)}`, true);
+serveMcp({
+  hostFile: "codex.toml",
+  runner: runRole,
+  experimental: { "codex/sandbox-state": {} },
+  locate(meta) {
+    const cwd = meta["codex/sandbox-state"]?.sandboxCwd;
+    if (typeof cwd !== "string") return null;
+    return {
+      cwd: cwd.startsWith("file://") ? (0, import_node_url.fileURLToPath)(cwd) : cwd,
+      session: typeof meta.sessionId === "string" ? meta.sessionId : ""
+    };
   }
-  if (project === null) return textResult(`[counterweight] \u672A\u914D\u7F6E [models].${role.name}\uFF0C${role.tool} \u4E0D\u53EF\u7528\u3002`);
-  return textResult(await callRole({
-    repo,
-    session: typeof meta.sessionId === "string" ? meta.sessionId : "",
-    project,
-    runner: runRole
-  }, role, params.arguments ?? {}, signal));
-}
-function handle(request) {
-  const { id, method } = request;
-  if (id === void 0) {
-    if (method === "notifications/cancelled" && request.params?.requestId !== void 0) {
-      pending.get(JSON.stringify(request.params.requestId))?.abort();
-    }
-    return;
-  }
-  switch (method) {
-    case "initialize":
-      reply(id, {
-        protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
-        capabilities: { tools: {}, experimental: { "codex/sandbox-state": {} } },
-        serverInfo: { name: "counterweight", version: "0.2.0" }
-      });
-      return;
-    case "ping":
-      reply(id, {});
-      return;
-    case "tools/list":
-      reply(id, { tools: TOOLS });
-      return;
-    case "tools/call": {
-      const key = JSON.stringify(id);
-      const controller = new AbortController();
-      pending.set(key, controller);
-      const work = callTool(request, controller.signal).then((result) => reply(id, result), (error) => reply(id, textResult(`[counterweight] ${message(error)}`, true))).finally(() => {
-        pending.delete(key);
-        inflight.delete(work);
-      });
-      inflight.add(work);
-      return;
-    }
-    default:
-      send({ id, error: { code: -32601, message: `method not found: ${method}` } });
-  }
-}
-var lines = (0, import_node_readline.createInterface)({ input: process.stdin });
-lines.on("line", (line) => {
-  if (line.trim() === "") return;
-  try {
-    handle(JSON.parse(line));
-  } catch (error) {
-    process.stderr.write(`[counterweight] ${message(error)}
-`);
-  }
-});
-lines.on("close", () => {
-  for (const controller of pending.values()) controller.abort();
-  void Promise.allSettled([...inflight]).then(() => process.exit(0));
 });
 /*! Bundled license information:
 

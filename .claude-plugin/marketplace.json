@@ -1,0 +1,14 @@
+{
+  "name": "counterweight",
+  "description": "Counterweight: end-of-turn check, protected paths and usage metering for coding agents.",
+  "owner": {
+    "name": "nerdneilsfield"
+  },
+  "plugins": [
+    {
+      "name": "counterweight",
+      "source": "./plugins/claude-counterweight",
+      "description": "Run the project's check at the end of each turn, guard protected paths, and record model usage."
+    }
+  ]
+}

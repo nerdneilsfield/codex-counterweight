@@ -56,6 +56,40 @@ export async function installFakeCodex(
   await writeFile(path.join(sandbox.bin, "script.json"), JSON.stringify(script));
 }
 
+export const CLAUDE_PLUGIN_ROOT = path.resolve("plugins/claude-counterweight");
+export const CLAUDE_HOOK = path.join(CLAUDE_PLUGIN_ROOT, "dist/hook.cjs");
+
+/** 带假 claude 的环境，约定同 `childEnv`。 */
+export function claudeEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    PATH: `${sandbox.bin}${path.delimiter}${process.env.PATH ?? ""}`,
+    CLAUDE_PLUGIN_DATA: sandbox.data,
+    CLAUDE_PLUGIN_ROOT,
+  };
+}
+
+export function runClaudeHook(sandbox: Sandbox, input: Record<string, unknown>): Promise<{ out: any; stdout: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", [CLAUDE_HOOK], { stdio: ["pipe", "pipe", "inherit"], env: claudeEnv(sandbox) });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.once("error", reject);
+    child.once("close", () => resolve({ out: stdout === "" ? null : JSON.parse(stdout), stdout }));
+    child.stdin.end(JSON.stringify({ cwd: sandbox.repo, session_id: "s1", prompt_id: "p1", ...input }));
+  });
+}
+
+/** 把假 claude 装到 `bin/claude`，行为写进 `bin/script.json`。 */
+export async function installFakeClaude(
+  sandbox: Sandbox, script: { default?: Behavior; byModel?: Record<string, Behavior> },
+): Promise<void> {
+  await mkdir(sandbox.bin, { recursive: true });
+  await copyFile(path.resolve("test/fake-claude.mjs"), path.join(sandbox.bin, "claude"));
+  await chmod(path.join(sandbox.bin, "claude"), 0o755);
+  await writeFile(path.join(sandbox.bin, "script.json"), JSON.stringify(script));
+}
+
 export interface Call { args: string[]; stdin: string; model: string; pid: number; childPid: number }
 
 export async function fakeCalls(sandbox: Sandbox): Promise<Call[]> {

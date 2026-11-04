@@ -2,7 +2,7 @@
  * 回合状态：hook 是一次性进程，跨 hook 的“每回合一次”标记和用户原话放在 `$PLUGIN_DATA`（Claude Code 是 `$CLAUDE_PLUGIN_DATA`）下的 `sessions/<session_id>/`。
  * 任何文件系统错误都让 `claim` 返回 false，也就是不续跑、不拦截。
  */
-import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 export type Claim = "repair" | "findings" | "pause";
@@ -45,6 +45,24 @@ export async function loadPrompt(session: string, turn: string): Promise<string>
   } catch {
     return "";
   }
+}
+
+/** 已记入计量的 transcript 消息 id；没有可用的数据目录时返回 null，调用方应当不记，免得重复。 */
+export async function loadSeen(session: string): Promise<Set<string> | null> {
+  const dir = sessionDir(session);
+  if (dir === null) return null;
+  try {
+    return new Set((await readFile(path.join(dir, "usage.seen"), "utf8")).split("\n").filter((id) => id !== ""));
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? new Set() : null;
+  }
+}
+
+export async function markSeen(session: string, id: string): Promise<void> {
+  const dir = sessionDir(session);
+  if (dir === null) return;
+  await mkdir(dir, { recursive: true });
+  await appendFile(path.join(dir, "usage.seen"), `${id}\n`);
 }
 
 export async function endSession(session: string): Promise<void> {
