@@ -41,6 +41,7 @@ export function runHook(sandbox: Sandbox, input: Record<string, unknown>): Promi
 export interface Behavior {
   answer?: string;
   mode?: "ok" | "hang" | "noturn";
+  failure?: string;
   delayMs?: number;
   usage?: Record<string, number>;
 }
