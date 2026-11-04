@@ -1,6 +1,7 @@
 /**
- * 读取并校验 `.cw/project.toml`（与 pi 版共用，校验规则一致）和可选的 `.cw/codex.toml`（Codex 的模型和沙箱）。
- * `project.toml` 的 `[models]` 在 Codex 下忽略。文件和每个小节都可选。解析或校验失败一律抛错，不返回半套配置。
+ * 读取并校验 `.cw/project.toml`（与 pi 版共用，校验规则一致）和可选的宿主文件
+ * `.cw/codex.toml`、`.cw/claude.toml` 或 `.cw/opencode.toml`（各自的模型；Codex 另有沙箱）。
+ * `project.toml` 的 `[models]` 在三个宿主下都忽略。文件和每个小节都可选。解析或校验失败一律抛错，不返回半套配置。
  * 旧的 `[explorer]`、`[observe]` 是未知字段，会让整份配置失败，检查和保护一起停。
  */
 import { readFile } from "node:fs/promises";
@@ -26,8 +27,8 @@ export interface CheckConfig {
  */
 const ModelName = { type: "string", minLength: 1, pattern: "^[^/\\s]+/[^\\s]+$" };
 
-/** Codex 模型 slug：非空且不含空白。 */
-const CodexModel = { type: "string", minLength: 1, pattern: "^[^\\s]+$" };
+/** Codex 模型 slug、Claude Code 别名或完整 id：非空且不含空白。 */
+const PlainModel = { type: "string", minLength: 1, pattern: "^[^\\s]+$" };
 
 const projectSchema = {
   type: "object",
@@ -113,29 +114,37 @@ export interface RouterConfig {
   audit_rate: number;
 }
 
-const codexSchema = {
+const roleModels = (model: object) => ({
   type: "object",
   additionalProperties: false,
   properties: {
-    models: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        explorer: CodexModel,
-        review: CodexModel,
-        over_review: CodexModel,
-        research: CodexModel,
-        historian: CodexModel,
-        planner: CodexModel,
+    explorer: model, review: model, over_review: model, research: model, historian: model, planner: model,
+  },
+});
+
+/** 三个宿主文件 schema 相同，`[roles] sandbox` 只有 Codex 接受；OpenCode 的模型是 `provider/model`。 */
+const hostSchemas = {
+  "codex.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      models: roleModels(PlainModel),
+      roles: {
+        type: "object",
+        additionalProperties: false,
+        properties: { sandbox: { enum: ["read-only", "none"] } },
       },
     },
-    roles: {
-      type: "object",
-      additionalProperties: false,
-      properties: { sandbox: { enum: ["read-only", "none"] } },
-    },
+  },
+  "claude.toml": {
+    type: "object", additionalProperties: false, properties: { models: roleModels(PlainModel) },
+  },
+  "opencode.toml": {
+    type: "object", additionalProperties: false, properties: { models: roleModels(ModelName) },
   },
 };
+
+export type HostFile = keyof typeof hostSchemas;
 
 export interface ProjectConfig {
   version: 1;
@@ -143,7 +152,7 @@ export interface ProjectConfig {
   check: CheckConfig | null;
   /** 受保护路径，仓库内相对路径或目录前缀。 */
   protect: { paths: string[] };
-  /** 六个角色的 Codex 模型，来自 `codex.toml`；没配为 null。 */
+  /** 六个角色的模型，来自宿主文件；没配为 null。 */
   models: Record<RoleKey, string | null>;
   /** 各角色在调用方没传 `timeout_s` 时的超时（秒）。 */
   timeouts: Partial<Record<RoleKey, number>>;
@@ -156,12 +165,12 @@ export interface ProjectConfig {
   sandbox: "read-only" | "none";
 }
 
-/** project.toml 不存在返回 null，即使 codex.toml 存在。codex.toml 可以缺。任一存在但不可读或非法时抛错。 */
-export async function loadProjectConfig(repo: string): Promise<ProjectConfig | null> {
+/** project.toml 不存在返回 null，即使宿主文件存在。宿主文件可以缺。任一存在但不可读或非法时抛错。 */
+export async function loadProjectConfig(repo: string, hostFile: HostFile): Promise<ProjectConfig | null> {
   const project = await readOptional(repo, "project.toml");
-  const codex = await readOptional(repo, "codex.toml");
+  const host = await readOptional(repo, hostFile);
   if (project === null) return null;
-  return parseProjectConfig(project, codex ?? "");
+  return parseProjectConfig(project, host ?? "", hostFile);
 }
 
 async function readOptional(repo: string, name: string): Promise<string | null> {
@@ -173,7 +182,7 @@ async function readOptional(repo: string, name: string): Promise<string | null> 
   }
 }
 
-export function parseProjectConfig(text: string, codexText = ""): ProjectConfig {
+export function parseProjectConfig(text: string, hostText = "", hostFile: HostFile = "codex.toml"): ProjectConfig {
   let parsed: unknown;
   try {
     parsed = parse(text);
@@ -181,13 +190,13 @@ export function parseProjectConfig(text: string, codexText = ""): ProjectConfig 
     throw new Error(`project.toml: ${error instanceof Error ? error.message : "unparsable"}`);
   }
   rejectUnknown(projectSchema, parsed, "project.toml");
-  let codexParsed: unknown;
+  let hostParsed: unknown;
   try {
-    codexParsed = parse(codexText);
+    hostParsed = parse(hostText);
   } catch (error) {
-    throw new Error(`codex.toml: ${error instanceof Error ? error.message : "unparsable"}`);
+    throw new Error(`${hostFile}: ${error instanceof Error ? error.message : "unparsable"}`);
   }
-  rejectUnknown(codexSchema, codexParsed, "codex.toml");
+  rejectUnknown(hostSchemas[hostFile], hostParsed, hostFile);
   const value = parsed as {
     check?: { cmd: string[]; timeout_s?: number; env?: Record<string, string> };
     protect?: { paths: string[] };
@@ -198,17 +207,17 @@ export function parseProjectConfig(text: string, codexText = ""): ProjectConfig 
     timeouts?: Partial<Record<RoleKey, number>>;
     auto?: { review?: boolean; chronicle?: boolean; pause?: boolean };
   };
-  const codex = codexParsed as {
+  const host = hostParsed as {
     models?: Partial<Record<RoleKey, string>>;
     roles?: { sandbox?: "read-only" | "none" };
   };
   const models = {
-    explorer: codex.models?.explorer ?? null,
-    review: codex.models?.review ?? null,
-    over_review: codex.models?.over_review ?? null,
-    research: codex.models?.research ?? null,
-    historian: codex.models?.historian ?? null,
-    planner: codex.models?.planner ?? null,
+    explorer: host.models?.explorer ?? null,
+    review: host.models?.review ?? null,
+    over_review: host.models?.over_review ?? null,
+    research: host.models?.research ?? null,
+    historian: host.models?.historian ?? null,
+    planner: host.models?.planner ?? null,
   };
   // 与 pi 版不同：[auto] 缺模型不算配置错误，该项视为关闭，否则共用文件里合法的 [auto] 会让检查和保护一起停。
   const wants = { review: false, chronicle: false, pause: false, ...value.auto };
@@ -238,7 +247,7 @@ export function parseProjectConfig(text: string, codexText = ""): ProjectConfig 
       skip_below: value.router.skip_below ?? 0.1,
       audit_rate: value.router.audit_rate ?? 0.1,
     },
-    sandbox: codex.roles?.sandbox ?? "read-only",
+    sandbox: host.roles?.sandbox ?? "read-only",
   };
 }
 

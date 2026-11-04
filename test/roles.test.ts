@@ -2,7 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { nextTimeoutS, runRole } from "../src/roles/run.js";
+import { runRole } from "../src/adapters/codex/runner.js";
+import { nextTimeoutS } from "../src/roles/run.js";
 import { alive, fakeCalls, installFakeCodex, until, type Sandbox } from "./support.js";
 
 let sandbox: Sandbox;

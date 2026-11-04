@@ -8260,7 +8260,7 @@ function rejectUnknown(schema, value, kind) {
 
 // src/core/config.ts
 var ModelName = { type: "string", minLength: 1, pattern: "^[^/\\s]+/[^\\s]+$" };
-var CodexModel = { type: "string", minLength: 1, pattern: "^[^\\s]+$" };
+var PlainModel = { type: "string", minLength: 1, pattern: "^[^\\s]+$" };
 var projectSchema = {
   type: "object",
   additionalProperties: false,
@@ -8332,34 +8332,47 @@ var projectSchema = {
   }
 };
 var DEFAULT_TIMEOUT_S = 600;
-var codexSchema = {
+var roleModels = (model) => ({
   type: "object",
   additionalProperties: false,
   properties: {
-    models: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        explorer: CodexModel,
-        review: CodexModel,
-        over_review: CodexModel,
-        research: CodexModel,
-        historian: CodexModel,
-        planner: CodexModel
+    explorer: model,
+    review: model,
+    over_review: model,
+    research: model,
+    historian: model,
+    planner: model
+  }
+});
+var hostSchemas = {
+  "codex.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      models: roleModels(PlainModel),
+      roles: {
+        type: "object",
+        additionalProperties: false,
+        properties: { sandbox: { enum: ["read-only", "none"] } }
       }
-    },
-    roles: {
-      type: "object",
-      additionalProperties: false,
-      properties: { sandbox: { enum: ["read-only", "none"] } }
     }
+  },
+  "claude.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: { models: roleModels(PlainModel) }
+  },
+  "opencode.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: { models: roleModels(ModelName) }
   }
 };
-async function loadProjectConfig(repo) {
+async function loadProjectConfig(repo, hostFile) {
   const project = await readOptional(repo, "project.toml");
-  const codex = await readOptional(repo, "codex.toml");
+  const host = await readOptional(repo, hostFile);
   if (project === null) return null;
-  return parseProjectConfig(project, codex ?? "");
+  return parseProjectConfig(project, host ?? "", hostFile);
 }
 async function readOptional(repo, name) {
   try {
@@ -8369,7 +8382,7 @@ async function readOptional(repo, name) {
     throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
   }
 }
-function parseProjectConfig(text, codexText = "") {
+function parseProjectConfig(text, hostText = "", hostFile = "codex.toml") {
   let parsed;
   try {
     parsed = parse(text);
@@ -8377,22 +8390,22 @@ function parseProjectConfig(text, codexText = "") {
     throw new Error(`project.toml: ${error instanceof Error ? error.message : "unparsable"}`);
   }
   rejectUnknown(projectSchema, parsed, "project.toml");
-  let codexParsed;
+  let hostParsed;
   try {
-    codexParsed = parse(codexText);
+    hostParsed = parse(hostText);
   } catch (error) {
-    throw new Error(`codex.toml: ${error instanceof Error ? error.message : "unparsable"}`);
+    throw new Error(`${hostFile}: ${error instanceof Error ? error.message : "unparsable"}`);
   }
-  rejectUnknown(codexSchema, codexParsed, "codex.toml");
+  rejectUnknown(hostSchemas[hostFile], hostParsed, hostFile);
   const value = parsed;
-  const codex = codexParsed;
+  const host = hostParsed;
   const models = {
-    explorer: codex.models?.explorer ?? null,
-    review: codex.models?.review ?? null,
-    over_review: codex.models?.over_review ?? null,
-    research: codex.models?.research ?? null,
-    historian: codex.models?.historian ?? null,
-    planner: codex.models?.planner ?? null
+    explorer: host.models?.explorer ?? null,
+    review: host.models?.review ?? null,
+    over_review: host.models?.over_review ?? null,
+    research: host.models?.research ?? null,
+    historian: host.models?.historian ?? null,
+    planner: host.models?.planner ?? null
   };
   const wants = { review: false, chronicle: false, pause: false, ...value.auto };
   const auto = {
@@ -8421,7 +8434,7 @@ function parseProjectConfig(text, codexText = "") {
       skip_below: value.router.skip_below ?? 0.1,
       audit_rate: value.router.audit_rate ?? 0.1
     },
-    sandbox: codex.roles?.sandbox ?? "read-only"
+    sandbox: host.roles?.sandbox ?? "read-only"
   };
 }
 function normalizeProtectedPath(value) {
@@ -8472,6 +8485,24 @@ function git(repo, args) {
 }
 
 // src/roles/run.ts
+var ROLE_TIMEOUT_MS = 3e5;
+var RESEARCH_TIMEOUT_MS = 18e5;
+function roleTimeoutMs(role) {
+  return role === "research" ? RESEARCH_TIMEOUT_MS : ROLE_TIMEOUT_MS;
+}
+var MIN_TIMEOUT_S = 300;
+var MAX_TIMEOUT_S = 1800;
+function clampTimeoutS(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
+  return Math.min(MAX_TIMEOUT_S, Math.max(MIN_TIMEOUT_S, Math.round(value)));
+}
+function nextTimeoutS(usedMs) {
+  const used = Math.round(usedMs / 1e3);
+  if (used >= MAX_TIMEOUT_S) return null;
+  return Math.min(MAX_TIMEOUT_S, used * 2);
+}
+
+// src/adapters/codex/runner.ts
 var import_promises4 = require("node:fs/promises");
 var import_node_os = require("node:os");
 var import_node_path3 = __toESM(require("node:path"), 1);
@@ -8681,23 +8712,7 @@ function rolePrompt(role) {
   return PROMPTS[role];
 }
 
-// src/roles/run.ts
-var ROLE_TIMEOUT_MS = 3e5;
-var RESEARCH_TIMEOUT_MS = 18e5;
-function roleTimeoutMs(role) {
-  return role === "research" ? RESEARCH_TIMEOUT_MS : ROLE_TIMEOUT_MS;
-}
-var MIN_TIMEOUT_S = 300;
-var MAX_TIMEOUT_S = 1800;
-function clampTimeoutS(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
-  return Math.min(MAX_TIMEOUT_S, Math.max(MIN_TIMEOUT_S, Math.round(value)));
-}
-function nextTimeoutS(usedMs) {
-  const used = Math.round(usedMs / 1e3);
-  if (used >= MAX_TIMEOUT_S) return null;
-  return Math.min(MAX_TIMEOUT_S, used * 2);
-}
+// src/adapters/codex/runner.ts
 function roleArgs(request) {
   return [
     "exec",
@@ -8973,7 +8988,7 @@ async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
   const started = Date.now();
   const configured = ctx.project.timeouts[role];
   const timeoutMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
-  const run = await runRole({
+  const run = await ctx.runner({
     role,
     workRoot: repo,
     model,
@@ -8994,7 +9009,7 @@ async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
         output: sample.output,
         cache_read: sample.cacheRead,
         cache_write: sample.cacheWrite,
-        cost_total: null
+        cost_total: sample.costTotal ?? null
       });
     } catch (error) {
       meterError ??= error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF";
@@ -9107,7 +9122,7 @@ async function callTool(request, signal) {
   const repo = await realpathOr(await repoToplevel(dir) ?? dir);
   let project;
   try {
-    project = await loadProjectConfig(repo);
+    project = await loadProjectConfig(repo, "codex.toml");
   } catch (error) {
     return textResult(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C${role.tool} \u4E0D\u53EF\u7528\uFF1A${message(error)}`, true);
   }
@@ -9115,7 +9130,8 @@ async function callTool(request, signal) {
   return textResult(await callRole({
     repo,
     session: typeof meta.sessionId === "string" ? meta.sessionId : "",
-    project
+    project,
+    runner: runRole
   }, role, params.arguments ?? {}, signal));
 }
 function handle(request) {

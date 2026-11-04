@@ -28,355 +28,11 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // src/adapters/codex/hook.ts
 var import_promises10 = require("node:fs/promises");
-var import_node_path10 = __toESM(require("node:path"), 1);
-
-// src/core/gitstate.ts
-var import_node_child_process = require("node:child_process");
-async function repoToplevel(dir) {
-  const result = await git(dir, ["rev-parse", "--show-toplevel"]);
-  if (result.code !== 0) return null;
-  return result.stdout.trim();
-}
-function git(repo, args) {
-  return new Promise((resolve, reject) => {
-    const child = (0, import_node_child_process.spawn)("git", args, {
-      cwd: repo,
-      env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        GIT_CONFIG_COUNT: "0"
-      }
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-
-// src/core/auto.ts
-var DIFF_CAP = 8e4;
-async function workingDiff(repo) {
-  const run = async (args) => {
-    try {
-      const result = await git(repo, args);
-      return result.code === 0 ? result.stdout : null;
-    } catch {
-      return null;
-    }
-  };
-  const tracked = await run(["diff", "HEAD", "--no-ext-diff", "--no-color"]);
-  if (tracked === null) return null;
-  const untracked = await run(["ls-files", "--others", "--exclude-standard", "--", ":!.cw"]);
-  const names = untracked === null ? [] : untracked.split("\n").filter((line) => line !== "");
-  const tail = names.length === 0 ? "" : `
-# \u672A\u8DDF\u8E2A\u7684\u65B0\u6587\u4EF6\uFF08\u53EA\u5217\u540D\u5B57\uFF09\uFF1A
-${names.map((name) => `# ${name}`).join("\n")}
-`;
-  const body = `${tracked}${tail}`;
-  if (body.trim() === "") return "";
-  return body.length > DIFF_CAP ? `${body.slice(0, DIFF_CAP)}
-# \u2026\uFF08diff \u8D85\u8FC7 ${DIFF_CAP} \u5B57\u7B26\uFF0C\u5DF2\u622A\u65AD\uFF09
-` : body;
-}
-function chronicleReport(request, files, checkLine) {
-  const list = files.length === 0 ? "\uFF08\u65E0\uFF09" : files.slice(0, 40).join("\n");
-  return `\u4E00\u8F6E\u5DE5\u4F5C\u7ED3\u675F\u3002
-
-\u7528\u6237\u8BF7\u6C42\uFF1A
-${request.trim() === "" ? "\uFF08\u672A\u53D6\u5230\uFF09" : request.slice(0, 2e3)}
-
-\u6539\u52A8\u7684\u6587\u4EF6\uFF1A
-${list}
-${checkLine === null ? "" : `
-\u7ED3\u675F\u68C0\u67E5\uFF1A${checkLine}
-`}
-\u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toISOString()}\u3002\u63D0\u4EA4\u4FE1\u606F\u4E0E\u65E5\u671F\u8BF7\u4EE5\u4ED3\u5E93\u4E3A\u51C6\uFF0C\u4E0D\u8981\u7F16\u9020\u3002`;
-}
-function changedFiles(diff) {
-  const seen = /* @__PURE__ */ new Set();
-  for (const match of diff.matchAll(/^diff --git a\/(.+?) b\/\1$/gm)) seen.add(match[1]);
-  for (const match of diff.matchAll(/^# (?!未跟踪|…)(.+)$/gm)) seen.add(match[1]);
-  return [...seen];
-}
-
-// src/core/check.ts
-var import_promises2 = require("node:fs/promises");
-var import_node_os = require("node:os");
-var import_node_path = __toESM(require("node:path"), 1);
-
-// src/core/process.ts
-var import_node_child_process2 = require("node:child_process");
-var import_promises = require("node:fs/promises");
-var KILL_GRACE_MS = 5e3;
-var GROUP_POLL_MS = 50;
-async function runProcess(options) {
-  const stdout = await (0, import_promises.open)(options.stdoutPath, "wx");
-  const stderr = await (0, import_promises.open)(options.stderrPath, "wx");
-  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises.open)(options.stdinPath, "r");
-  const abort = linkAbort(options.signal, options.timeoutMs);
-  let child;
-  let watch;
-  let watchdog;
-  let runnerError = null;
-  try {
-    if (!abort.signal.aborted && options.cmd.length > 0) {
-      child = (0, import_node_child_process2.spawn)(options.cmd[0], options.cmd.slice(1), {
-        cwd: options.cwd,
-        detached: true,
-        stdio: [stdin?.fd ?? "ignore", stdout.fd, stderr.fd],
-        env: options.env
-      });
-      watch = watchChild(child);
-      if (child.pid !== void 0) watchdog = startWatchdog(child.pid);
-    } else if (options.cmd.length === 0) {
-      runnerError = "command empty";
-    }
-  } catch (error) {
-    runnerError = error instanceof Error ? error.message : "failed to start";
-  } finally {
-    await stdout.close();
-    await stderr.close();
-    await stdin?.close();
-  }
-  const stop2 = watch ? await stopGroup(watch, abort) : { exitCode: null, signal: null };
-  watchdog?.kill();
-  abort.cancelTimer();
-  const failure = runnerError ?? watch?.state.spawnError ?? null;
-  return {
-    exitCode: failure === null ? stop2.exitCode : null,
-    signal: stop2.signal,
-    timedOut: abort.timedOut,
-    get cancelled() {
-      return abort.cancelled;
-    },
-    runnerError: failure,
-    dispose: () => abort.dispose()
-  };
-}
-function startWatchdog(pgid) {
-  const script = "process.stdin.resume();process.stdin.on('end',()=>{try{process.kill(-Number(process.argv[1]),'SIGKILL')}catch{}process.exit(0)})";
-  try {
-    const watchdog = (0, import_node_child_process2.spawn)(process.execPath, ["-e", script, String(pgid)], {
-      detached: true,
-      stdio: ["pipe", "ignore", "ignore"]
-    });
-    watchdog.on("error", () => {
-    });
-    watchdog.stdin?.on("error", () => {
-    });
-    watchdog.unref();
-    return watchdog;
-  } catch {
-    return void 0;
-  }
-}
-function linkAbort(parent, timeoutMs) {
-  const controller = new AbortController();
-  const state = { cancelled: parent?.aborted === true, timedOut: false };
-  const onParent = () => {
-    state.cancelled = true;
-    controller.abort();
-  };
-  if (parent) {
-    if (parent.aborted) controller.abort();
-    else parent.addEventListener("abort", onParent, { once: true });
-  }
-  const timer = setTimeout(() => {
-    state.timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  return {
-    signal: controller.signal,
-    get cancelled() {
-      return state.cancelled;
-    },
-    get timedOut() {
-      return state.timedOut;
-    },
-    cancelTimer() {
-      clearTimeout(timer);
-    },
-    dispose() {
-      clearTimeout(timer);
-      parent?.removeEventListener("abort", onParent);
-    }
-  };
-}
-function watchChild(child) {
-  const state = {
-    exited: false,
-    code: null,
-    signal: null,
-    spawned: false,
-    spawnError: null
-  };
-  let resolveLeader;
-  const leader = new Promise((resolve) => {
-    resolveLeader = resolve;
-  });
-  child.once("spawn", () => {
-    state.spawned = true;
-    resolveLeader(child.pid);
-  });
-  child.once("error", (error) => {
-    if (!state.spawned) state.spawnError = error.message;
-    resolveLeader(child.pid);
-  });
-  child.once("exit", (code, signal) => {
-    state.exited = true;
-    state.code = code;
-    state.signal = signal;
-    resolveLeader(child.pid);
-  });
-  return { leader, state };
-}
-async function stopGroup(watch, abort) {
-  const leader = await watch.leader;
-  if (leader === void 0) return { exitCode: watch.state.code ?? 1, signal: watch.state.signal };
-  let termSent = false;
-  let killSent = false;
-  let killAt = 0;
-  const arm = () => {
-    if (termSent) return;
-    termSent = true;
-    killAt = Date.now() + KILL_GRACE_MS;
-    signalGroup(leader, "SIGTERM");
-  };
-  if (abort.signal.aborted) arm();
-  else abort.signal.addEventListener("abort", arm, { once: true });
-  while (!watch.state.exited || groupAlive(leader)) {
-    if (abort.signal.aborted) arm();
-    if (termSent && !killSent && Date.now() >= killAt) {
-      killSent = true;
-      signalGroup(leader, "SIGKILL");
-    }
-    await delay(GROUP_POLL_MS);
-  }
-  abort.signal.removeEventListener("abort", arm);
-  return { exitCode: watch.state.code, signal: watch.state.signal };
-}
-function signalGroup(pid, signal) {
-  try {
-    process.kill(-pid, signal);
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
-    if (code !== "ESRCH" && code !== "EPERM") throw error;
-  }
-}
-function groupAlive(pid) {
-  try {
-    process.kill(-pid, 0);
-    return true;
-  } catch (error) {
-    const code = error instanceof Error && "code" in error ? error.code : "";
-    if (code === "ESRCH") return false;
-    if (code === "EPERM") return true;
-    throw error;
-  }
-}
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// src/core/check.ts
-var TAIL_LINES = 80;
-var TAIL_BYTES = 16 * 1024;
-async function runEndCheck(request) {
-  const directory = await (0, import_promises2.mkdtemp)(import_node_path.default.join((0, import_node_os.tmpdir)(), "cw-check-"));
-  const stdoutPath = import_node_path.default.join(directory, "stdout.log");
-  const stderrPath = import_node_path.default.join(directory, "stderr.log");
-  const started = Date.now();
-  let run = null;
-  try {
-    run = await runProcess({
-      cwd: request.repo,
-      cmd: request.check.cmd,
-      env: { ...process.env, ...request.check.env },
-      timeoutMs: request.check.timeout_s * 1e3,
-      stdoutPath,
-      stderrPath,
-      signal: request.signal
-    });
-    const stdout = await readTail(stdoutPath);
-    const stderr = await readTail(stderrPath);
-    return {
-      exitCode: run.exitCode,
-      signal: run.signal,
-      timedOut: run.timedOut,
-      cancelled: run.cancelled,
-      runnerError: run.runnerError,
-      durationMs: Date.now() - started,
-      stdoutTail: stdout.text,
-      stdoutTruncated: stdout.truncated,
-      stderrTail: stderr.text,
-      stderrTruncated: stderr.truncated
-    };
-  } finally {
-    run?.dispose();
-    await (0, import_promises2.rm)(directory, { recursive: true, force: true });
-  }
-}
-function checkPassed(outcome) {
-  return outcome.runnerError === null && !outcome.timedOut && !outcome.cancelled && outcome.exitCode === 0;
-}
-function renderCheckReport(outcome, options) {
-  const seconds = (outcome.durationMs / 1e3).toFixed(1);
-  const lines = [];
-  if (outcome.runnerError !== null) {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u542F\u52A8\uFF1A\`${options.command}\`\uFF08${outcome.runnerError}\uFF09`);
-  } else if (outcome.timedOut) {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u8D85\u65F6\uFF08${seconds}s\uFF09\uFF0C\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62\uFF1A\`${options.command}\``);
-  } else if (outcome.signal !== null) {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u88AB\u4FE1\u53F7 ${outcome.signal} \u7EC8\u6B62\uFF1A\`${options.command}\``);
-  } else if (outcome.exitCode === 0) {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u901A\u8FC7\uFF1A\`${options.command}\` \u9000\u51FA\u7801 0\uFF08${seconds}s\uFF09`);
-  } else {
-    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u901A\u8FC7\uFF1A\`${options.command}\` \u9000\u51FA\u7801 ${outcome.exitCode}\uFF08${seconds}s\uFF09` + (options.final ? "\uFF1B\u4E0D\u518D\u81EA\u52A8\u91CD\u8BD5" : ""));
-  }
-  appendTail(lines, "\u6807\u51C6\u8F93\u51FA", outcome.stdoutTail, outcome.stdoutTruncated);
-  appendTail(lines, "\u6807\u51C6\u9519\u8BEF", outcome.stderrTail, outcome.stderrTruncated);
-  return lines.join("\n");
-}
-function appendTail(lines, label, text2, truncated) {
-  if (text2 === "") return;
-  lines.push(`${label}\uFF08\u5C3E\u90E8${truncated ? "\uFF0C\u5DF2\u622A\u65AD" : ""}\uFF09\uFF1A`);
-  lines.push(text2);
-}
-async function readTail(file) {
-  let chunk;
-  let cut = false;
-  try {
-    const handle = await (0, import_promises2.open)(file, "r");
-    try {
-      const size = (await handle.stat()).size;
-      const readSize = Math.min(size, TAIL_BYTES);
-      chunk = Buffer.alloc(readSize);
-      await handle.read(chunk, 0, readSize, size - readSize);
-      cut = size > readSize;
-    } finally {
-      await handle.close();
-    }
-  } catch {
-    return { text: "", truncated: false };
-  }
-  const lines = chunk.toString("utf8").split("\n");
-  if (cut && lines.length > 0) lines.shift();
-  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  const truncatedLines = lines.length > TAIL_LINES;
-  const kept = truncatedLines ? lines.slice(lines.length - TAIL_LINES) : lines;
-  return { text: kept.join("\n").replace(/\s+$/, ""), truncated: cut || truncatedLines };
-}
+var import_node_path11 = __toESM(require("node:path"), 1);
 
 // src/core/config.ts
-var import_promises4 = require("node:fs/promises");
-var import_node_path3 = __toESM(require("node:path"), 1);
+var import_promises2 = require("node:fs/promises");
+var import_node_path2 = __toESM(require("node:path"), 1);
 
 // node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string, ptr) {
@@ -406,10 +62,10 @@ var TomlError = class _TomlError extends Error {
   line;
   column;
   codeblock;
-  constructor(message2, options) {
+  constructor(message3, options) {
     const [line, column] = getLineColFromPtr(options.toml, options.ptr);
     const codeblock = makeCodeBlock(options.toml, line, column);
-    super(`Invalid TOML document: ${message2}
+    super(`Invalid TOML document: ${message3}
 
 ${codeblock}`, options);
     this.line = line;
@@ -417,8 +73,8 @@ ${codeblock}`, options);
     this.codeblock = codeblock;
   }
   /** @internal */
-  static x(message2, ctx, ptr) {
-    throw new _TomlError(message2, { toml: ctx.s, ptr: ptr ?? ctx.p });
+  static x(message3, ctx, ptr) {
+    throw new _TomlError(message3, { toml: ctx.s, ptr: ptr ?? ctx.p });
   }
 };
 
@@ -1137,10 +793,10 @@ function parse(toml, options = {}) {
 var HAS_WELLFORMED = !!"".isWellFormed;
 
 // src/core/paths.ts
-var import_promises3 = require("node:fs/promises");
-var import_node_path2 = __toESM(require("node:path"), 1);
+var import_promises = require("node:fs/promises");
+var import_node_path = __toESM(require("node:path"), 1);
 function relativeParts(value) {
-  if (value === "" || import_node_path2.default.isAbsolute(value) || import_node_path2.default.win32.isAbsolute(value)) {
+  if (value === "" || import_node_path.default.isAbsolute(value) || import_node_path.default.win32.isAbsolute(value)) {
     throw new Error(`path: must be repo-relative ${value}`);
   }
   const parts = value.split("/");
@@ -1150,15 +806,15 @@ function relativeParts(value) {
   return parts;
 }
 function pathInside(root, candidate) {
-  const relative = import_node_path2.default.relative(root, candidate);
-  return relative === "" || !relative.startsWith("..") && !import_node_path2.default.isAbsolute(relative);
+  const relative = import_node_path.default.relative(root, candidate);
+  return relative === "" || !relative.startsWith("..") && !import_node_path.default.isAbsolute(relative);
 }
 async function resolveWriteTarget(root, relative) {
   const parts = relativeParts(relative);
-  const absolute = import_node_path2.default.join(root, ...parts);
+  const absolute = import_node_path.default.join(root, ...parts);
   let leaf;
   try {
-    leaf = await (0, import_promises3.lstat)(absolute);
+    leaf = await (0, import_promises.lstat)(absolute);
   } catch (error) {
     if (!isNotFound(error)) throw error;
     leaf = null;
@@ -1175,10 +831,10 @@ async function resolveWriteTarget(root, relative) {
     return await containedRelative(root, absolute, relative);
   }
   for (let length = parts.length - 1; length >= 1; length -= 1) {
-    const ancestor = import_node_path2.default.join(root, ...parts.slice(0, length));
+    const ancestor = import_node_path.default.join(root, ...parts.slice(0, length));
     let stat;
     try {
-      stat = await (0, import_promises3.lstat)(ancestor);
+      stat = await (0, import_promises.lstat)(ancestor);
     } catch (error) {
       if (isNotFound(error)) continue;
       throw error;
@@ -1193,14 +849,14 @@ async function resolveWriteTarget(root, relative) {
   return relative;
 }
 async function containedRelative(root, candidate, label) {
-  const target = await (0, import_promises3.realpath)(candidate);
+  const target = await (0, import_promises.realpath)(candidate);
   if (!pathInside(root, target)) throw new Error(`path: symlink escapes repository ${label}`);
-  const relative = import_node_path2.default.relative(root, target);
-  return relative === "" ? "" : relative.split(import_node_path2.default.sep).join("/");
+  const relative = import_node_path.default.relative(root, target);
+  return relative === "" ? "" : relative.split(import_node_path.default.sep).join("/");
 }
 async function realpathOr(value) {
   try {
-    return await (0, import_promises3.realpath)(value);
+    return await (0, import_promises.realpath)(value);
   } catch {
     return value;
   }
@@ -8035,8 +7691,8 @@ function HasCodec(...args) {
 
 // node_modules/typebox/build/value/create/error.mjs
 var CreateError = class extends Error {
-  constructor(type, message2) {
-    super(message2);
+  constructor(type, message3) {
+    super(message3);
     this.type = type;
   }
 };
@@ -8255,23 +7911,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path11, value) {
-  return { type: "update", path: path11, value };
+function CreateUpdate(path12, value) {
+  return { type: "update", path: path12, value };
 }
-function CreateInsert(path11, value) {
-  return { type: "insert", path: path11, value };
+function CreateInsert(path12, value) {
+  return { type: "insert", path: path12, value };
 }
-function CreateDelete(path11) {
-  return { type: "delete", path: path11 };
+function CreateDelete(path12) {
+  return { type: "delete", path: path12 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path11, left, right) {
+function* FromObject17(path12, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path12, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -8281,7 +7937,7 @@ function* FromObject17(path11, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path11}/${key}`, right[key]);
+    yield CreateInsert(`${path12}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -8290,52 +7946,52 @@ function* FromObject17(path11, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path11}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path12}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path11}/${key}`);
+    yield CreateDelete(`${path12}/${key}`);
   }
 }
-function* FromArray13(path11, left, right) {
+function* FromArray13(path12, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path12, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path11}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path12}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path11}/${i}`, right[i]);
+    yield CreateInsert(`${path12}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path11}/${i}`);
+    yield CreateDelete(`${path12}/${i}`);
   }
 }
-function* FromTypedArray2(path11, left, right) {
+function* FromTypedArray2(path12, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path11}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path12}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path12, right);
   }
 }
-function* FromUnknown(path11, left, right) {
+function* FromUnknown(path12, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path11, right);
+  yield CreateUpdate(path12, right);
 }
-function* FromValue4(path11, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path11, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path11, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path11, left, right) : yield* FromUnknown(path11, left, right);
+function* FromValue4(path12, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path12, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path12, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path12, left, right) : yield* FromUnknown(path12, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8392,8 +8048,8 @@ function Patch(current, edits) {
 
 // node_modules/typebox/build/value/repair/error.mjs
 var RepairError = class extends Error {
-  constructor(context, type, value, message2) {
-    super(message2);
+  constructor(context, type, value, message3) {
+    super(message3);
     this.context = context;
     this.type = type;
     this.value = value;
@@ -8653,7 +8309,7 @@ function rejectUnknown(schema, value, kind) {
 
 // src/core/config.ts
 var ModelName = { type: "string", minLength: 1, pattern: "^[^/\\s]+/[^\\s]+$" };
-var CodexModel = { type: "string", minLength: 1, pattern: "^[^\\s]+$" };
+var PlainModel = { type: "string", minLength: 1, pattern: "^[^\\s]+$" };
 var projectSchema = {
   type: "object",
   additionalProperties: false,
@@ -8725,44 +8381,57 @@ var projectSchema = {
   }
 };
 var DEFAULT_TIMEOUT_S = 600;
-var codexSchema = {
+var roleModels = (model) => ({
   type: "object",
   additionalProperties: false,
   properties: {
-    models: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        explorer: CodexModel,
-        review: CodexModel,
-        over_review: CodexModel,
-        research: CodexModel,
-        historian: CodexModel,
-        planner: CodexModel
+    explorer: model,
+    review: model,
+    over_review: model,
+    research: model,
+    historian: model,
+    planner: model
+  }
+});
+var hostSchemas = {
+  "codex.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      models: roleModels(PlainModel),
+      roles: {
+        type: "object",
+        additionalProperties: false,
+        properties: { sandbox: { enum: ["read-only", "none"] } }
       }
-    },
-    roles: {
-      type: "object",
-      additionalProperties: false,
-      properties: { sandbox: { enum: ["read-only", "none"] } }
     }
+  },
+  "claude.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: { models: roleModels(PlainModel) }
+  },
+  "opencode.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: { models: roleModels(ModelName) }
   }
 };
-async function loadProjectConfig(repo) {
+async function loadProjectConfig(repo, hostFile) {
   const project = await readOptional(repo, "project.toml");
-  const codex = await readOptional(repo, "codex.toml");
+  const host = await readOptional(repo, hostFile);
   if (project === null) return null;
-  return parseProjectConfig(project, codex ?? "");
+  return parseProjectConfig(project, host ?? "", hostFile);
 }
 async function readOptional(repo, name) {
   try {
-    return await (0, import_promises4.readFile)(import_node_path3.default.join(repo, ".cw", name), "utf8");
+    return await (0, import_promises2.readFile)(import_node_path2.default.join(repo, ".cw", name), "utf8");
   } catch (error) {
     if (isNotFound(error)) return null;
     throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
   }
 }
-function parseProjectConfig(text2, codexText = "") {
+function parseProjectConfig(text2, hostText = "", hostFile = "codex.toml") {
   let parsed;
   try {
     parsed = parse(text2);
@@ -8770,22 +8439,22 @@ function parseProjectConfig(text2, codexText = "") {
     throw new Error(`project.toml: ${error instanceof Error ? error.message : "unparsable"}`);
   }
   rejectUnknown(projectSchema, parsed, "project.toml");
-  let codexParsed;
+  let hostParsed;
   try {
-    codexParsed = parse(codexText);
+    hostParsed = parse(hostText);
   } catch (error) {
-    throw new Error(`codex.toml: ${error instanceof Error ? error.message : "unparsable"}`);
+    throw new Error(`${hostFile}: ${error instanceof Error ? error.message : "unparsable"}`);
   }
-  rejectUnknown(codexSchema, codexParsed, "codex.toml");
+  rejectUnknown(hostSchemas[hostFile], hostParsed, hostFile);
   const value = parsed;
-  const codex = codexParsed;
+  const host = hostParsed;
   const models = {
-    explorer: codex.models?.explorer ?? null,
-    review: codex.models?.review ?? null,
-    over_review: codex.models?.over_review ?? null,
-    research: codex.models?.research ?? null,
-    historian: codex.models?.historian ?? null,
-    planner: codex.models?.planner ?? null
+    explorer: host.models?.explorer ?? null,
+    review: host.models?.review ?? null,
+    over_review: host.models?.over_review ?? null,
+    research: host.models?.research ?? null,
+    historian: host.models?.historian ?? null,
+    planner: host.models?.planner ?? null
   };
   const wants = { review: false, chronicle: false, pause: false, ...value.auto };
   const auto = {
@@ -8814,7 +8483,7 @@ function parseProjectConfig(text2, codexText = "") {
       skip_below: value.router.skip_below ?? 0.1,
       audit_rate: value.router.audit_rate ?? 0.1
     },
-    sandbox: codex.roles?.sandbox ?? "read-only"
+    sandbox: host.roles?.sandbox ?? "read-only"
   };
 }
 function normalizeProtectedPath(value) {
@@ -8832,6 +8501,353 @@ function normalizeProtectedPath(value) {
     throw new Error(`project.toml: protect.paths \u4E0D\u63A5\u53D7 .cw \u4E0B\u7684\u8DEF\u5F84 ${value}`);
   }
   return normalized;
+}
+
+// src/core/flow.ts
+var import_node_path8 = __toESM(require("node:path"), 1);
+
+// src/core/gitstate.ts
+var import_node_child_process = require("node:child_process");
+async function repoToplevel(dir) {
+  const result = await git(dir, ["rev-parse", "--show-toplevel"]);
+  if (result.code !== 0) return null;
+  return result.stdout.trim();
+}
+function git(repo, args) {
+  return new Promise((resolve, reject) => {
+    const child = (0, import_node_child_process.spawn)("git", args, {
+      cwd: repo,
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        GIT_CONFIG_COUNT: "0"
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
+// src/core/auto.ts
+var DIFF_CAP = 8e4;
+async function workingDiff(repo) {
+  const run = async (args) => {
+    try {
+      const result = await git(repo, args);
+      return result.code === 0 ? result.stdout : null;
+    } catch {
+      return null;
+    }
+  };
+  const tracked = await run(["diff", "HEAD", "--no-ext-diff", "--no-color"]);
+  if (tracked === null) return null;
+  const untracked = await run(["ls-files", "--others", "--exclude-standard", "--", ":!.cw"]);
+  const names = untracked === null ? [] : untracked.split("\n").filter((line) => line !== "");
+  const tail = names.length === 0 ? "" : `
+# \u672A\u8DDF\u8E2A\u7684\u65B0\u6587\u4EF6\uFF08\u53EA\u5217\u540D\u5B57\uFF09\uFF1A
+${names.map((name) => `# ${name}`).join("\n")}
+`;
+  const body = `${tracked}${tail}`;
+  if (body.trim() === "") return "";
+  return body.length > DIFF_CAP ? `${body.slice(0, DIFF_CAP)}
+# \u2026\uFF08diff \u8D85\u8FC7 ${DIFF_CAP} \u5B57\u7B26\uFF0C\u5DF2\u622A\u65AD\uFF09
+` : body;
+}
+function chronicleReport(request, files, checkLine) {
+  const list = files.length === 0 ? "\uFF08\u65E0\uFF09" : files.slice(0, 40).join("\n");
+  return `\u4E00\u8F6E\u5DE5\u4F5C\u7ED3\u675F\u3002
+
+\u7528\u6237\u8BF7\u6C42\uFF1A
+${request.trim() === "" ? "\uFF08\u672A\u53D6\u5230\uFF09" : request.slice(0, 2e3)}
+
+\u6539\u52A8\u7684\u6587\u4EF6\uFF1A
+${list}
+${checkLine === null ? "" : `
+\u7ED3\u675F\u68C0\u67E5\uFF1A${checkLine}
+`}
+\u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toISOString()}\u3002\u63D0\u4EA4\u4FE1\u606F\u4E0E\u65E5\u671F\u8BF7\u4EE5\u4ED3\u5E93\u4E3A\u51C6\uFF0C\u4E0D\u8981\u7F16\u9020\u3002`;
+}
+function changedFiles(diff) {
+  const seen = /* @__PURE__ */ new Set();
+  for (const match of diff.matchAll(/^diff --git a\/(.+?) b\/\1$/gm)) seen.add(match[1]);
+  for (const match of diff.matchAll(/^# (?!未跟踪|…)(.+)$/gm)) seen.add(match[1]);
+  return [...seen];
+}
+
+// src/core/check.ts
+var import_promises4 = require("node:fs/promises");
+var import_node_os = require("node:os");
+var import_node_path3 = __toESM(require("node:path"), 1);
+
+// src/core/process.ts
+var import_node_child_process2 = require("node:child_process");
+var import_promises3 = require("node:fs/promises");
+var KILL_GRACE_MS = 5e3;
+var GROUP_POLL_MS = 50;
+async function runProcess(options) {
+  const stdout = await (0, import_promises3.open)(options.stdoutPath, "wx");
+  const stderr = await (0, import_promises3.open)(options.stderrPath, "wx");
+  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises3.open)(options.stdinPath, "r");
+  const abort = linkAbort(options.signal, options.timeoutMs);
+  let child;
+  let watch;
+  let watchdog;
+  let runnerError = null;
+  try {
+    if (!abort.signal.aborted && options.cmd.length > 0) {
+      child = (0, import_node_child_process2.spawn)(options.cmd[0], options.cmd.slice(1), {
+        cwd: options.cwd,
+        detached: true,
+        stdio: [stdin?.fd ?? "ignore", stdout.fd, stderr.fd],
+        env: options.env
+      });
+      watch = watchChild(child);
+      if (child.pid !== void 0) watchdog = startWatchdog(child.pid);
+    } else if (options.cmd.length === 0) {
+      runnerError = "command empty";
+    }
+  } catch (error) {
+    runnerError = error instanceof Error ? error.message : "failed to start";
+  } finally {
+    await stdout.close();
+    await stderr.close();
+    await stdin?.close();
+  }
+  const stop2 = watch ? await stopGroup(watch, abort) : { exitCode: null, signal: null };
+  watchdog?.kill();
+  abort.cancelTimer();
+  const failure = runnerError ?? watch?.state.spawnError ?? null;
+  return {
+    exitCode: failure === null ? stop2.exitCode : null,
+    signal: stop2.signal,
+    timedOut: abort.timedOut,
+    get cancelled() {
+      return abort.cancelled;
+    },
+    runnerError: failure,
+    dispose: () => abort.dispose()
+  };
+}
+function startWatchdog(pgid) {
+  const script = "process.stdin.resume();process.stdin.on('end',()=>{try{process.kill(-Number(process.argv[1]),'SIGKILL')}catch{}process.exit(0)})";
+  try {
+    const watchdog = (0, import_node_child_process2.spawn)(process.execPath, ["-e", script, String(pgid)], {
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"]
+    });
+    watchdog.on("error", () => {
+    });
+    watchdog.stdin?.on("error", () => {
+    });
+    watchdog.unref();
+    return watchdog;
+  } catch {
+    return void 0;
+  }
+}
+function linkAbort(parent, timeoutMs) {
+  const controller = new AbortController();
+  const state = { cancelled: parent?.aborted === true, timedOut: false };
+  const onParent = () => {
+    state.cancelled = true;
+    controller.abort();
+  };
+  if (parent) {
+    if (parent.aborted) controller.abort();
+    else parent.addEventListener("abort", onParent, { once: true });
+  }
+  const timer = setTimeout(() => {
+    state.timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  return {
+    signal: controller.signal,
+    get cancelled() {
+      return state.cancelled;
+    },
+    get timedOut() {
+      return state.timedOut;
+    },
+    cancelTimer() {
+      clearTimeout(timer);
+    },
+    dispose() {
+      clearTimeout(timer);
+      parent?.removeEventListener("abort", onParent);
+    }
+  };
+}
+function watchChild(child) {
+  const state = {
+    exited: false,
+    code: null,
+    signal: null,
+    spawned: false,
+    spawnError: null
+  };
+  let resolveLeader;
+  const leader = new Promise((resolve) => {
+    resolveLeader = resolve;
+  });
+  child.once("spawn", () => {
+    state.spawned = true;
+    resolveLeader(child.pid);
+  });
+  child.once("error", (error) => {
+    if (!state.spawned) state.spawnError = error.message;
+    resolveLeader(child.pid);
+  });
+  child.once("exit", (code, signal) => {
+    state.exited = true;
+    state.code = code;
+    state.signal = signal;
+    resolveLeader(child.pid);
+  });
+  return { leader, state };
+}
+async function stopGroup(watch, abort) {
+  const leader = await watch.leader;
+  if (leader === void 0) return { exitCode: watch.state.code ?? 1, signal: watch.state.signal };
+  let termSent = false;
+  let killSent = false;
+  let killAt = 0;
+  const arm = () => {
+    if (termSent) return;
+    termSent = true;
+    killAt = Date.now() + KILL_GRACE_MS;
+    signalGroup(leader, "SIGTERM");
+  };
+  if (abort.signal.aborted) arm();
+  else abort.signal.addEventListener("abort", arm, { once: true });
+  while (!watch.state.exited || groupAlive(leader)) {
+    if (abort.signal.aborted) arm();
+    if (termSent && !killSent && Date.now() >= killAt) {
+      killSent = true;
+      signalGroup(leader, "SIGKILL");
+    }
+    await delay(GROUP_POLL_MS);
+  }
+  abort.signal.removeEventListener("abort", arm);
+  return { exitCode: watch.state.code, signal: watch.state.signal };
+}
+function signalGroup(pid, signal) {
+  try {
+    process.kill(-pid, signal);
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : "";
+    if (code !== "ESRCH" && code !== "EPERM") throw error;
+  }
+}
+function groupAlive(pid) {
+  try {
+    process.kill(-pid, 0);
+    return true;
+  } catch (error) {
+    const code = error instanceof Error && "code" in error ? error.code : "";
+    if (code === "ESRCH") return false;
+    if (code === "EPERM") return true;
+    throw error;
+  }
+}
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// src/core/check.ts
+var TAIL_LINES = 80;
+var TAIL_BYTES = 16 * 1024;
+async function runEndCheck(request) {
+  const directory = await (0, import_promises4.mkdtemp)(import_node_path3.default.join((0, import_node_os.tmpdir)(), "cw-check-"));
+  const stdoutPath = import_node_path3.default.join(directory, "stdout.log");
+  const stderrPath = import_node_path3.default.join(directory, "stderr.log");
+  const started = Date.now();
+  let run = null;
+  try {
+    run = await runProcess({
+      cwd: request.repo,
+      cmd: request.check.cmd,
+      env: { ...process.env, ...request.check.env },
+      timeoutMs: request.check.timeout_s * 1e3,
+      stdoutPath,
+      stderrPath,
+      signal: request.signal
+    });
+    const stdout = await readTail(stdoutPath);
+    const stderr = await readTail(stderrPath);
+    return {
+      exitCode: run.exitCode,
+      signal: run.signal,
+      timedOut: run.timedOut,
+      cancelled: run.cancelled,
+      runnerError: run.runnerError,
+      durationMs: Date.now() - started,
+      stdoutTail: stdout.text,
+      stdoutTruncated: stdout.truncated,
+      stderrTail: stderr.text,
+      stderrTruncated: stderr.truncated
+    };
+  } finally {
+    run?.dispose();
+    await (0, import_promises4.rm)(directory, { recursive: true, force: true });
+  }
+}
+function checkPassed(outcome) {
+  return outcome.runnerError === null && !outcome.timedOut && !outcome.cancelled && outcome.exitCode === 0;
+}
+function renderCheckReport(outcome, options) {
+  const seconds = (outcome.durationMs / 1e3).toFixed(1);
+  const lines = [];
+  if (outcome.runnerError !== null) {
+    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u542F\u52A8\uFF1A\`${options.command}\`\uFF08${outcome.runnerError}\uFF09`);
+  } else if (outcome.timedOut) {
+    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u8D85\u65F6\uFF08${seconds}s\uFF09\uFF0C\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62\uFF1A\`${options.command}\``);
+  } else if (outcome.signal !== null) {
+    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u88AB\u4FE1\u53F7 ${outcome.signal} \u7EC8\u6B62\uFF1A\`${options.command}\``);
+  } else if (outcome.exitCode === 0) {
+    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u901A\u8FC7\uFF1A\`${options.command}\` \u9000\u51FA\u7801 0\uFF08${seconds}s\uFF09`);
+  } else {
+    lines.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u901A\u8FC7\uFF1A\`${options.command}\` \u9000\u51FA\u7801 ${outcome.exitCode}\uFF08${seconds}s\uFF09` + (options.final ? "\uFF1B\u4E0D\u518D\u81EA\u52A8\u91CD\u8BD5" : ""));
+  }
+  appendTail(lines, "\u6807\u51C6\u8F93\u51FA", outcome.stdoutTail, outcome.stdoutTruncated);
+  appendTail(lines, "\u6807\u51C6\u9519\u8BEF", outcome.stderrTail, outcome.stderrTruncated);
+  return lines.join("\n");
+}
+function appendTail(lines, label, text2, truncated) {
+  if (text2 === "") return;
+  lines.push(`${label}\uFF08\u5C3E\u90E8${truncated ? "\uFF0C\u5DF2\u622A\u65AD" : ""}\uFF09\uFF1A`);
+  lines.push(text2);
+}
+async function readTail(file) {
+  let chunk;
+  let cut = false;
+  try {
+    const handle = await (0, import_promises4.open)(file, "r");
+    try {
+      const size = (await handle.stat()).size;
+      const readSize = Math.min(size, TAIL_BYTES);
+      chunk = Buffer.alloc(readSize);
+      await handle.read(chunk, 0, readSize, size - readSize);
+      cut = size > readSize;
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return { text: "", truncated: false };
+  }
+  const lines = chunk.toString("utf8").split("\n");
+  if (cut && lines.length > 0) lines.shift();
+  if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+  const truncatedLines = lines.length > TAIL_LINES;
+  const kept = truncatedLines ? lines.slice(lines.length - TAIL_LINES) : lines;
+  return { text: kept.join("\n").replace(/\s+$/, ""), truncated: cut || truncatedLines };
 }
 
 // src/core/meter.ts
@@ -8881,8 +8897,8 @@ var TRANSCRIPT_BUDGET = 6e4;
 var TOOL_RESULT_CAP = 2e3;
 function renderTranscript(messages, budget = TRANSCRIPT_BUDGET) {
   const blocks = [];
-  for (const message2 of messages) {
-    const block = renderMessage(message2);
+  for (const message3 of messages) {
+    const block = renderMessage(message3);
     if (block !== "") blocks.push(block);
   }
   let total = 0;
@@ -8897,27 +8913,27 @@ function renderTranscript(messages, budget = TRANSCRIPT_BUDGET) {
 
 ${kept}`;
 }
-function renderMessage(message2) {
-  switch (message2.role) {
+function renderMessage(message3) {
+  switch (message3.role) {
     case "user":
       return `[\u7528\u6237]
-${textOf(message2.content)}`;
+${textOf(message3.content)}`;
     case "assistant":
-      return renderAssistant(message2.content);
+      return renderAssistant(message3.content);
     case "toolResult": {
-      const body = textOf(message2.content);
+      const body = textOf(message3.content);
       const cut = body.length > TOOL_RESULT_CAP ? `${body.slice(0, TOOL_RESULT_CAP)}
 \u2026\uFF08\u5DF2\u622A\u65AD\uFF09` : body;
-      return `[\u5DE5\u5177\u7ED3\u679C ${message2.toolName ?? ""}]
+      return `[\u5DE5\u5177\u7ED3\u679C ${message3.toolName ?? ""}]
 ${cut}`;
     }
     case "bashExecution":
-      return `[bash] ${message2.command ?? ""}
-${(message2.output ?? "").slice(0, TOOL_RESULT_CAP)}`;
+      return `[bash] ${message3.command ?? ""}
+${(message3.output ?? "").slice(0, TOOL_RESULT_CAP)}`;
     case "compactionSummary":
     case "branchSummary":
       return `[\u6B64\u524D\u7684\u6458\u8981]
-${message2.summary ?? ""}`;
+${message3.summary ?? ""}`;
     default:
       return "";
   }
@@ -8959,28 +8975,333 @@ ${plan}`;
 
 // src/core/protect.ts
 var import_node_path5 = __toESM(require("node:path"), 1);
-var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml"];
+var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
 function isProtected(relative, patterns) {
   const normalized = relative.split(import_node_path5.default.sep).join("/");
   if (CONFIG_FILES.includes(normalized)) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
-// src/core/turnstate.ts
+// src/roles/tools.ts
+var import_promises7 = require("node:fs/promises");
+var import_node_path7 = __toESM(require("node:path"), 1);
+
+// src/core/cwfile.ts
 var import_promises6 = require("node:fs/promises");
 var import_node_path6 = __toESM(require("node:path"), 1);
+async function writeCwFile(repo, name, content) {
+  const dir = import_node_path6.default.join(repo, ".cw");
+  await (0, import_promises6.mkdir)(dir, { recursive: true });
+  const stat = await (0, import_promises6.lstat)(dir);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
+  }
+  const target = import_node_path6.default.join(dir, name);
+  const temp = `${target}.${process.pid}.tmp`;
+  await (0, import_promises6.writeFile)(temp, content);
+  await (0, import_promises6.rename)(temp, target);
+  return target;
+}
+
+// src/roles/run.ts
+var ROLE_TIMEOUT_MS = 3e5;
+var RESEARCH_TIMEOUT_MS = 18e5;
+function roleTimeoutMs(role) {
+  return role === "research" ? RESEARCH_TIMEOUT_MS : ROLE_TIMEOUT_MS;
+}
+var MIN_TIMEOUT_S = 300;
+var MAX_TIMEOUT_S = 1800;
+function nextTimeoutS(usedMs) {
+  const used = Math.round(usedMs / 1e3);
+  if (used >= MAX_TIMEOUT_S) return null;
+  return Math.min(MAX_TIMEOUT_S, used * 2);
+}
+
+// src/roles/tools.ts
+function timeoutAdvice(tool, usedMs) {
+  const next = nextTimeoutS(usedMs);
+  return next === null ? `\u5DF2\u7ECF\u7528\u6EE1 ${MAX_TIMEOUT_S} \u79D2\u4E0A\u9650\uFF0C\u518D\u52A0\u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\uFF08\u5206\u6587\u4EF6\u3001\u5206\u63D0\u4EA4\uFF09\u540E\u518D\u8C03\u7528 ${tool}\u3002` : `\u4E0B\u4E00\u6863\uFF1A\u7528 timeout_s=${next} \u91CD\u65B0\u8C03\u7528 ${tool}\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF0C\u4E0A\u9650 ${MAX_TIMEOUT_S}\uFF09\u3002`;
+}
+var TIMEOUT_DESCRIPTION = `\u672C\u6B21\u8C03\u7528\u7684\u8D85\u65F6\u79D2\u6570\uFF08${MIN_TIMEOUT_S}\u2013${MAX_TIMEOUT_S}\uFF0C\u8D8A\u754C\u4F1A\u88AB\u5939\u4F4F\uFF09\u3002\u6309\u8F93\u5165\u5927\u5C0F\u4F30\uFF1A\u5C0F\u8F93\u5165\u4E0D\u4F20\uFF0C\u7528\u9ED8\u8BA4 ${MIN_TIMEOUT_S}\uFF1B\u660E\u663E\u5F88\u5927\uFF08\u957F diff\u3001\u8DE8\u5F88\u591A\u6587\u4EF6\uFF09\u5C31\u5148\u8BBE\u957F\u4E00\u4E9B\u3002\u8D85\u65F6\u540E\u8FD4\u56DE\u91CC\u4F1A\u7ED9\u4E0B\u4E00\u6863\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF09\uFF0C\u7167\u7740\u91CD\u8BD5\uFF1B\u5DF2\u5230 ${MAX_TIMEOUT_S} \u8FD8\u8D85\u65F6\u5C31\u62C6\u5C0F\u8F93\u5165\uFF0C\u522B\u518D\u52A0\u3002`;
+var HISTORY_FILE = "HISTORY.md";
+function reviewMessage(params) {
+  return `\u8981\u6C42\uFF1A
+${params.request}
+
+diff\uFF1A
+${params.diff}
+`;
+}
+async function runAndMeter(ctx, role, tool, model, message3, signal, askedS) {
+  const { repo, session } = ctx;
+  const started = Date.now();
+  const configured = ctx.project.timeouts[role];
+  const timeoutMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
+  const run = await ctx.runner({
+    role,
+    workRoot: repo,
+    model,
+    sandbox: ctx.project.sandbox,
+    message: message3,
+    signal,
+    timeoutMs
+  });
+  let spent = 0;
+  let meterError = null;
+  for (const sample of run.usage) {
+    try {
+      await recordUsage(repo, {
+        time: (/* @__PURE__ */ new Date()).toISOString(),
+        session,
+        model,
+        input: sample.input,
+        output: sample.output,
+        cache_read: sample.cacheRead,
+        cache_write: sample.cacheWrite,
+        cost_total: sample.costTotal ?? null
+      });
+    } catch (error) {
+      meterError ??= error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF";
+    }
+    spent += sample.input + sample.output + sample.cacheRead + sample.cacheWrite;
+  }
+  const meterNote = meterError === null ? "" : `\uFF1B\u7528\u91CF\u672A\u80FD\u5199\u5165\u8BA1\u91CF\uFF08${meterError}\uFF09`;
+  if (run.error !== null) {
+    await recordEvent(repo, session, role, {
+      outcome: "failed",
+      error: run.error,
+      tokens: spent,
+      ms: Date.now() - started,
+      timed_out: run.timedOut,
+      cancelled: run.cancelled
+    }).catch(() => {
+    });
+    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timeoutAdvice(tool, timeoutMs) : ""}` };
+  }
+  const head = run.answer.trim();
+  const result = head === "none" ? "none" : head.startsWith("ASK:") ? "ask" : "answer";
+  await recordEvent(repo, session, role, {
+    outcome: "answered",
+    result,
+    tokens: spent,
+    ms: Date.now() - started,
+    timed_out: false
+  }).catch(() => {
+  });
+  return {
+    answer: run.answer,
+    text: `[counterweight] ${tool}\uFF08\u6A21\u578B ${model}\uFF0C\u6D88\u8017 ${spent} token${meterNote}\uFF09\uFF1A
+${run.answer}`
+  };
+}
+async function readHistory(repo) {
+  try {
+    return await (0, import_promises7.readFile)(import_node_path7.default.join(repo, ".cw", HISTORY_FILE), "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") return "";
+    throw error;
+  }
+}
+async function chronicle(ctx, model, report, signal, askedS) {
+  let current;
+  try {
+    current = await readHistory(ctx.repo);
+  } catch (error) {
+    return `[counterweight] cw_chronicle \u8BFB\u4E0D\u4E86 .cw/${HISTORY_FILE}\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
+  }
+  const message3 = `\u5F53\u524D\u6587\u6863\uFF1A
+${current === "" ? "\uFF08\u7A7A\uFF09" : current}
+
+\u6C47\u62A5\uFF1A
+${report}
+`;
+  const { text: note, answer } = await runAndMeter(ctx, "historian", "cw_chronicle", model, message3, signal, askedS);
+  if (answer === null) return note;
+  const body = answer.trim();
+  if (body.startsWith("ASK:")) return `${note}
+\u53F2\u5B98\u9700\u8981\u4F60\u534F\u8C03\u540E\u518D\u6C47\u62A5\uFF0C\u6587\u6863\u672A\u6539\u52A8\u3002`;
+  if (!body.startsWith("# ")) return `[counterweight] cw_chronicle \u53F2\u5B98\u6CA1\u6709\u8FD4\u56DE\u6574\u4EFD\u6587\u6863\uFF08\u9996\u884C\u4E0D\u662F # \u6807\u9898\uFF09\uFF0C\u6587\u6863\u672A\u6539\u52A8\uFF1A
+${body.slice(0, 200)}`;
+  try {
+    if (await readHistory(ctx.repo) !== current) {
+      return `[counterweight] cw_chronicle \u6587\u6863\u5728\u6B64\u671F\u95F4\u88AB\u6539\u52A8\uFF0C\u672A\u5199\u5165\uFF0C\u8BF7\u91CD\u65B0\u6C47\u62A5\u3002`;
+    }
+    await writeCwFile(ctx.repo, HISTORY_FILE, `${body}
+`);
+  } catch (error) {
+    return `[counterweight] cw_chronicle \u5199\u5165\u5931\u8D25\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
+  }
+  return `[counterweight] cw_chronicle \u5DF2\u66F4\u65B0 .cw/${HISTORY_FILE}\u3002`;
+}
+
+// src/core/flow.ts
+var MAX_CHECK_TIMEOUT_S = 3570;
+var message = (error) => error instanceof Error ? error.message : String(error);
+var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/ \u4E0B\u7684\u5BBF\u4E3B\u914D\u7F6E\u6587\u4EF6\u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
+var UNVERIFIABLE_REASON = (value) => `[counterweight] \u8DEF\u5F84\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF08\u7B26\u53F7\u94FE\u63A5\u9003\u9038\u4ED3\u5E93\u6216\u4E0D\u53EF\u89E3\u6790\uFF09\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${value}`;
+async function checkPaths(root, cwd, project, paths) {
+  try {
+    if (paths.length === 0) return "[counterweight] \u65E0\u6CD5\u4ECE\u8865\u4E01\u4E2D\u89E3\u6790\u51FA\u8DEF\u5F84\uFF0C\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF0C\u5DF2\u62D2\u7EDD\u3002";
+    const realCwd = await realpathOr(cwd);
+    const reasons = [];
+    for (const raw of paths) {
+      const reason = await checkProtectedTarget(root, realCwd, project.protect.paths, raw);
+      if (reason !== null) reasons.push(reason);
+    }
+    return reasons.length > 0 ? reasons.join("\n") : null;
+  } catch (error) {
+    return `[counterweight] \u4FDD\u62A4\u68C0\u67E5\u51FA\u9519\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${message(error)}`;
+  }
+}
+async function checkProtectedTarget(root, cwd, patterns, raw) {
+  const lexical = toRepoRelative(root, cwd, raw);
+  if (lexical === null) return `[counterweight] \u8DEF\u5F84\u4E0D\u5728\u4ED3\u5E93\u5185\uFF0C\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${raw}`;
+  if (isProtected(lexical, patterns)) return PROTECTED_REASON(lexical);
+  let resolved;
+  try {
+    resolved = await resolveWriteTarget(root, lexical);
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    return UNVERIFIABLE_REASON(raw);
+  }
+  if (isProtected(resolved, patterns)) {
+    const via = resolved === lexical ? "" : `\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u8BE5\u53D7\u4FDD\u62A4\u6587\u4EF6\uFF09`;
+    return `${PROTECTED_REASON(resolved)}${via}`;
+  }
+  return null;
+}
+function toRepoRelative(repoRoot, cwd, value) {
+  const relative = import_node_path8.default.relative(repoRoot, import_node_path8.default.resolve(cwd, value));
+  if (relative === "" || relative.startsWith("..") || import_node_path8.default.isAbsolute(relative)) return null;
+  return relative.split(import_node_path8.default.sep).join("/");
+}
+async function endCheck(params) {
+  const { root, project, session, signal } = params;
+  const texts = [];
+  let checkReport = null;
+  let attention = false;
+  if (project.check !== null) {
+    try {
+      const check = project.check;
+      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
+      const started = Date.now();
+      const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout }, signal });
+      const passed = checkPassed(outcome);
+      const retry = !passed && await params.claim("repair");
+      let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final: !passed && !retry });
+      if (timeout < check.timeout_s) {
+        report += `
+[counterweight] check.timeout_s=${check.timeout_s} \u8D85\u8FC7\u4E0A\u9650\uFF0C\u5B9E\u9645\u8D85\u65F6 ${timeout}s`;
+      }
+      await recordEvent(root, session, "check", {
+        exit_code: outcome.exitCode,
+        timed_out: outcome.timedOut,
+        spawn_error: outcome.runnerError,
+        ms: Date.now() - started,
+        outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported"
+      }).catch(() => {
+      });
+      if (retry) return { continueWith: report, report: null, attention: false };
+      checkReport = report;
+      attention = !passed;
+    } catch (error) {
+      checkReport = `[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u5B8C\u6210\uFF0C\u672C\u8F6E\u6CA1\u6709\u5F97\u5230\u68C0\u67E5\u7ED3\u8BBA\uFF1A${message(error)}`;
+      attention = true;
+    }
+    texts.push(checkReport);
+  }
+  const auto = await runAuto(params, checkReport);
+  if (auto.findings !== null) return { continueWith: auto.findings, report: checkReport, attention };
+  if (auto.text !== null) {
+    texts.push(auto.text);
+    attention = true;
+  }
+  return { continueWith: null, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
+}
+async function runAuto(params, checkLine) {
+  const none = { text: null, findings: null };
+  const { root, project, session, signal } = params;
+  try {
+    if (!project.auto.review && !project.auto.chronicle) return none;
+    const diff = await workingDiff(root);
+    if (diff === null || diff.trim() === "") return none;
+    const ctx = { repo: root, session, project, runner: params.runner };
+    if (project.auto.review) {
+      const body = reviewMessage({ request: await params.prompt(), diff });
+      const [correct, over] = await Promise.all([
+        runAndMeter(ctx, "review", "cw_review", project.models.review, body, signal),
+        runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review, body, signal)
+      ]);
+      const findings = [correct, over].map((run) => run.answer?.trim() ?? "").filter((answer) => answer !== "" && answer !== "none" && !answer.startsWith("ASK:"));
+      if (findings.length > 0) {
+        if (await params.claim("findings")) {
+          return { text: null, findings: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u5904\u7406\u6216\u8BF4\u660E\u4E3A\u4EC0\u4E48\u4E0D\u5904\u7406\uFF1A
+
+${findings.join("\n\n")}` };
+        }
+        return { text: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\uFF08\u7EED\u8DD1\u4E4B\u540E\uFF09\u4ECD\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
+
+${findings.join("\n\n")}`, findings: null };
+      }
+    }
+    if (project.auto.chronicle) {
+      const report = chronicleReport(await params.prompt(), changedFiles(diff), checkLine);
+      await chronicle(ctx, project.models.historian, report, signal);
+    }
+    return none;
+  } catch {
+    return none;
+  }
+}
+async function pausePlan(params) {
+  try {
+    const { root, project, session } = params;
+    const planner = project.models.planner;
+    if (!project.auto.pause || planner === null) return null;
+    const targets = params.paths.map((raw) => toRepoRelative(root, params.cwd, raw)).filter((relative) => isSourceEdit(relative));
+    if (targets.length === 0) return null;
+    if (!await params.claim()) return null;
+    const started = Date.now();
+    const outcome = async (result) => {
+      await recordEvent(root, session, "pause", { outcome: result, ms: Date.now() - started, tool: params.tool }).catch(() => {
+      });
+    };
+    try {
+      const body = plannerMessage(await params.transcript(), targets.join(", "), params.tool, params.input);
+      const run = await runAndMeter(
+        { repo: root, session, project, runner: params.runner },
+        "planner",
+        "cw_pause",
+        planner,
+        body,
+        params.signal
+      );
+      await outcome(run.answer === null ? "failed" : "planned");
+      return run.answer === null ? null : pauseReason(run.answer.trim());
+    } catch {
+      await outcome("failed");
+      return null;
+    }
+  } catch {
+    return null;
+  }
+}
+
+// src/core/turnstate.ts
+var import_promises8 = require("node:fs/promises");
+var import_node_path9 = __toESM(require("node:path"), 1);
 function sessionDir(session) {
-  const data = process.env.PLUGIN_DATA;
+  const data = process.env.PLUGIN_DATA ?? process.env.CLAUDE_PLUGIN_DATA;
   if (data === void 0 || data === "") return null;
   if (session === "" || session.includes("/") || session.includes("\\") || session.includes("..")) return null;
-  return import_node_path6.default.join(data, "sessions", session);
+  return import_node_path9.default.join(data, "sessions", session);
 }
 async function claim(session, turn, name) {
   try {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return false;
-    await (0, import_promises6.mkdir)(dir, { recursive: true });
-    const handle = await (0, import_promises6.open)(import_node_path6.default.join(dir, `${turn}.${name}`), "wx");
+    await (0, import_promises8.mkdir)(dir, { recursive: true });
+    const handle = await (0, import_promises8.open)(import_node_path9.default.join(dir, `${turn}.${name}`), "wx");
     await handle.close();
     return true;
   } catch {
@@ -8990,21 +9311,21 @@ async function claim(session, turn, name) {
 async function savePrompt(session, turn, prompt) {
   const dir = sessionDir(session);
   if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
-  await (0, import_promises6.mkdir)(dir, { recursive: true });
-  await (0, import_promises6.writeFile)(import_node_path6.default.join(dir, `${turn}.prompt`), prompt);
+  await (0, import_promises8.mkdir)(dir, { recursive: true });
+  await (0, import_promises8.writeFile)(import_node_path9.default.join(dir, `${turn}.prompt`), prompt);
 }
 async function loadPrompt(session, turn) {
   try {
     const dir = sessionDir(session);
     if (dir === null) return "";
-    return await (0, import_promises6.readFile)(import_node_path6.default.join(dir, `${turn}.prompt`), "utf8");
+    return await (0, import_promises8.readFile)(import_node_path9.default.join(dir, `${turn}.prompt`), "utf8");
   } catch {
     return "";
   }
 }
 async function endSession(session) {
   const dir = sessionDir(session);
-  if (dir !== null) await (0, import_promises6.rm)(dir, { recursive: true, force: true });
+  if (dir !== null) await (0, import_promises8.rm)(dir, { recursive: true, force: true });
 }
 
 // src/roles/explorer.md
@@ -9067,43 +9388,21 @@ ${auto.chronicle ? FORCED_CHRONICLE : CHRONICLE_PARAGRAPH}
 Stop when the current question is answered. Do not ask whether to continue.`;
 }
 
-// src/roles/tools.ts
-var import_promises9 = require("node:fs/promises");
-var import_node_path9 = __toESM(require("node:path"), 1);
-
-// src/core/cwfile.ts
-var import_promises7 = require("node:fs/promises");
-var import_node_path7 = __toESM(require("node:path"), 1);
-async function writeCwFile(repo, name, content) {
-  const dir = import_node_path7.default.join(repo, ".cw");
-  await (0, import_promises7.mkdir)(dir, { recursive: true });
-  const stat = await (0, import_promises7.lstat)(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
+// src/adapters/codex/patch.ts
+var PATH_LINE = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/;
+function patchPaths(text2) {
+  const found = /* @__PURE__ */ new Set();
+  for (const line of text2.split("\n")) {
+    const match = PATH_LINE.exec(line.replace(/\r$/, ""));
+    if (match !== null && match[1].trim() !== "") found.add(match[1].trim());
   }
-  const target = import_node_path7.default.join(dir, name);
-  const temp = `${target}.${process.pid}.tmp`;
-  await (0, import_promises7.writeFile)(temp, content);
-  await (0, import_promises7.rename)(temp, target);
-  return target;
+  return [...found];
 }
 
-// src/roles/run.ts
-var import_promises8 = require("node:fs/promises");
+// src/adapters/codex/runner.ts
+var import_promises9 = require("node:fs/promises");
 var import_node_os2 = require("node:os");
-var import_node_path8 = __toESM(require("node:path"), 1);
-var ROLE_TIMEOUT_MS = 3e5;
-var RESEARCH_TIMEOUT_MS = 18e5;
-function roleTimeoutMs(role) {
-  return role === "research" ? RESEARCH_TIMEOUT_MS : ROLE_TIMEOUT_MS;
-}
-var MIN_TIMEOUT_S = 300;
-var MAX_TIMEOUT_S = 1800;
-function nextTimeoutS(usedMs) {
-  const used = Math.round(usedMs / 1e3);
-  if (used >= MAX_TIMEOUT_S) return null;
-  return Math.min(MAX_TIMEOUT_S, used * 2);
-}
+var import_node_path10 = __toESM(require("node:path"), 1);
 function roleArgs(request) {
   return [
     "exec",
@@ -9124,24 +9423,24 @@ function roleArgs(request) {
   ];
 }
 async function runRole(request) {
-  const scratch = await (0, import_promises8.mkdtemp)(import_node_path8.default.join((0, import_node_os2.tmpdir)(), "cw-role-"));
+  const scratch = await (0, import_promises9.mkdtemp)(import_node_path10.default.join((0, import_node_os2.tmpdir)(), "cw-role-"));
   try {
-    const messagePath = import_node_path8.default.join(scratch, "message.md");
-    await (0, import_promises8.writeFile)(messagePath, request.message);
+    const messagePath = import_node_path10.default.join(scratch, "message.md");
+    await (0, import_promises9.writeFile)(messagePath, request.message);
     const outcome = await runProcess({
       cwd: request.workRoot,
       cmd: ["codex", ...roleArgs(request)],
       env: { ...process.env },
       timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
-      stdoutPath: import_node_path8.default.join(scratch, "stdout.jsonl"),
-      stderrPath: import_node_path8.default.join(scratch, "stderr.log"),
+      stdoutPath: import_node_path10.default.join(scratch, "stdout.jsonl"),
+      stderrPath: import_node_path10.default.join(scratch, "stderr.log"),
       stdinPath: messagePath,
       signal: request.signal
     });
     try {
       let stdout = "";
       try {
-        stdout = await (0, import_promises8.readFile)(import_node_path8.default.join(scratch, "stdout.jsonl"), "utf8");
+        stdout = await (0, import_promises9.readFile)(import_node_path10.default.join(scratch, "stdout.jsonl"), "utf8");
       } catch (error) {
         return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf2(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
       }
@@ -9151,7 +9450,7 @@ async function runRole(request) {
       if (outcome.timedOut) return failure("\u8D85\u65F6\uFF0C\u5B50\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62");
       if (outcome.runnerError !== null) return failure(`\u65E0\u6CD5\u542F\u52A8 codex\uFF1A${outcome.runnerError}`);
       if (!events.completed) {
-        const stderr = await (0, import_promises8.readFile)(import_node_path8.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
+        const stderr = await (0, import_promises9.readFile)(import_node_path10.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
         const detail = events.failure ?? stderr.trim().split("\n").pop()?.slice(0, 300) ?? "";
         return failure(`\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u9000\u51FA\u7801 ${outcome.exitCode}${detail === "" ? "" : `\uFF1A${detail}`}\uFF09`);
       }
@@ -9162,7 +9461,7 @@ async function runRole(request) {
       outcome.dispose();
     }
   } finally {
-    await (0, import_promises8.rm)(scratch, { recursive: true, force: true });
+    await (0, import_promises9.rm)(scratch, { recursive: true, force: true });
   }
 }
 function parseEvents(stdout) {
@@ -9200,134 +9499,6 @@ function parseEvents(stdout) {
 }
 function textOf2(error) {
   return error instanceof Error ? error.message : "unreadable";
-}
-
-// src/roles/tools.ts
-function timeoutAdvice(tool, usedMs) {
-  const next = nextTimeoutS(usedMs);
-  return next === null ? `\u5DF2\u7ECF\u7528\u6EE1 ${MAX_TIMEOUT_S} \u79D2\u4E0A\u9650\uFF0C\u518D\u52A0\u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\uFF08\u5206\u6587\u4EF6\u3001\u5206\u63D0\u4EA4\uFF09\u540E\u518D\u8C03\u7528 ${tool}\u3002` : `\u4E0B\u4E00\u6863\uFF1A\u7528 timeout_s=${next} \u91CD\u65B0\u8C03\u7528 ${tool}\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF0C\u4E0A\u9650 ${MAX_TIMEOUT_S}\uFF09\u3002`;
-}
-var TIMEOUT_DESCRIPTION = `\u672C\u6B21\u8C03\u7528\u7684\u8D85\u65F6\u79D2\u6570\uFF08${MIN_TIMEOUT_S}\u2013${MAX_TIMEOUT_S}\uFF0C\u8D8A\u754C\u4F1A\u88AB\u5939\u4F4F\uFF09\u3002\u6309\u8F93\u5165\u5927\u5C0F\u4F30\uFF1A\u5C0F\u8F93\u5165\u4E0D\u4F20\uFF0C\u7528\u9ED8\u8BA4 ${MIN_TIMEOUT_S}\uFF1B\u660E\u663E\u5F88\u5927\uFF08\u957F diff\u3001\u8DE8\u5F88\u591A\u6587\u4EF6\uFF09\u5C31\u5148\u8BBE\u957F\u4E00\u4E9B\u3002\u8D85\u65F6\u540E\u8FD4\u56DE\u91CC\u4F1A\u7ED9\u4E0B\u4E00\u6863\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF09\uFF0C\u7167\u7740\u91CD\u8BD5\uFF1B\u5DF2\u5230 ${MAX_TIMEOUT_S} \u8FD8\u8D85\u65F6\u5C31\u62C6\u5C0F\u8F93\u5165\uFF0C\u522B\u518D\u52A0\u3002`;
-var HISTORY_FILE = "HISTORY.md";
-function reviewMessage(params) {
-  return `\u8981\u6C42\uFF1A
-${params.request}
-
-diff\uFF1A
-${params.diff}
-`;
-}
-async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
-  const { repo, session } = ctx;
-  const started = Date.now();
-  const configured = ctx.project.timeouts[role];
-  const timeoutMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
-  const run = await runRole({
-    role,
-    workRoot: repo,
-    model,
-    sandbox: ctx.project.sandbox,
-    message: message2,
-    signal,
-    timeoutMs
-  });
-  let spent = 0;
-  let meterError = null;
-  for (const sample of run.usage) {
-    try {
-      await recordUsage(repo, {
-        time: (/* @__PURE__ */ new Date()).toISOString(),
-        session,
-        model,
-        input: sample.input,
-        output: sample.output,
-        cache_read: sample.cacheRead,
-        cache_write: sample.cacheWrite,
-        cost_total: null
-      });
-    } catch (error) {
-      meterError ??= error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF";
-    }
-    spent += sample.input + sample.output + sample.cacheRead + sample.cacheWrite;
-  }
-  const meterNote = meterError === null ? "" : `\uFF1B\u7528\u91CF\u672A\u80FD\u5199\u5165\u8BA1\u91CF\uFF08${meterError}\uFF09`;
-  if (run.error !== null) {
-    await recordEvent(repo, session, role, {
-      outcome: "failed",
-      error: run.error,
-      tokens: spent,
-      ms: Date.now() - started,
-      timed_out: run.timedOut,
-      cancelled: run.cancelled
-    }).catch(() => {
-    });
-    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timeoutAdvice(tool, timeoutMs) : ""}` };
-  }
-  const head = run.answer.trim();
-  const result = head === "none" ? "none" : head.startsWith("ASK:") ? "ask" : "answer";
-  await recordEvent(repo, session, role, {
-    outcome: "answered",
-    result,
-    tokens: spent,
-    ms: Date.now() - started,
-    timed_out: false
-  }).catch(() => {
-  });
-  return {
-    answer: run.answer,
-    text: `[counterweight] ${tool}\uFF08\u6A21\u578B ${model}\uFF0C\u6D88\u8017 ${spent} token${meterNote}\uFF09\uFF1A
-${run.answer}`
-  };
-}
-async function readHistory(repo) {
-  try {
-    return await (0, import_promises9.readFile)(import_node_path9.default.join(repo, ".cw", HISTORY_FILE), "utf8");
-  } catch (error) {
-    if (error.code === "ENOENT") return "";
-    throw error;
-  }
-}
-async function chronicle(ctx, model, report, signal, askedS) {
-  let current;
-  try {
-    current = await readHistory(ctx.repo);
-  } catch (error) {
-    return `[counterweight] cw_chronicle \u8BFB\u4E0D\u4E86 .cw/${HISTORY_FILE}\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
-  }
-  const message2 = `\u5F53\u524D\u6587\u6863\uFF1A
-${current === "" ? "\uFF08\u7A7A\uFF09" : current}
-
-\u6C47\u62A5\uFF1A
-${report}
-`;
-  const { text: note, answer } = await runAndMeter(ctx, "historian", "cw_chronicle", model, message2, signal, askedS);
-  if (answer === null) return note;
-  const body = answer.trim();
-  if (body.startsWith("ASK:")) return `${note}
-\u53F2\u5B98\u9700\u8981\u4F60\u534F\u8C03\u540E\u518D\u6C47\u62A5\uFF0C\u6587\u6863\u672A\u6539\u52A8\u3002`;
-  if (!body.startsWith("# ")) return `[counterweight] cw_chronicle \u53F2\u5B98\u6CA1\u6709\u8FD4\u56DE\u6574\u4EFD\u6587\u6863\uFF08\u9996\u884C\u4E0D\u662F # \u6807\u9898\uFF09\uFF0C\u6587\u6863\u672A\u6539\u52A8\uFF1A
-${body.slice(0, 200)}`;
-  try {
-    if (await readHistory(ctx.repo) !== current) {
-      return `[counterweight] cw_chronicle \u6587\u6863\u5728\u6B64\u671F\u95F4\u88AB\u6539\u52A8\uFF0C\u672A\u5199\u5165\uFF0C\u8BF7\u91CD\u65B0\u6C47\u62A5\u3002`;
-    }
-    await writeCwFile(ctx.repo, HISTORY_FILE, `${body}
-`);
-  } catch (error) {
-    return `[counterweight] cw_chronicle \u5199\u5165\u5931\u8D25\uFF1A${error instanceof Error ? error.message : "\u672A\u77E5\u9519\u8BEF"}`;
-  }
-  return `[counterweight] cw_chronicle \u5DF2\u66F4\u65B0 .cw/${HISTORY_FILE}\u3002`;
-}
-
-// src/adapters/codex/patch.ts
-var PATH_LINE = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/;
-function patchPaths(text2) {
-  const found = /* @__PURE__ */ new Set();
-  for (const line of text2.split("\n")) {
-    const match = PATH_LINE.exec(line.replace(/\r$/, ""));
-    if (match !== null && match[1].trim() !== "") found.add(match[1].trim());
-  }
-  return [...found];
 }
 
 // src/adapters/codex/transcript.ts
@@ -9381,10 +9552,7 @@ function parseTranscript(rollout) {
 }
 
 // src/adapters/codex/hook.ts
-var MAX_CHECK_TIMEOUT_S = 3570;
-var message = (error) => error instanceof Error ? error.message : String(error);
-var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/codex.toml \u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
-var UNVERIFIABLE_REASON = (value) => `[counterweight] \u8DEF\u5F84\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF08\u7B26\u53F7\u94FE\u63A5\u9003\u9038\u4ED3\u5E93\u6216\u4E0D\u53EF\u89E3\u6790\uFF09\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${value}`;
+var message2 = (error) => error instanceof Error ? error.message : String(error);
 async function main() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
@@ -9421,13 +9589,13 @@ async function sessionStart(root) {
   const notes = [];
   let project = null;
   try {
-    project = await loadProjectConfig(root);
+    project = await loadProjectConfig(root, "codex.toml");
     for (const item of project?.autoSkipped ?? []) {
       notes.push(`[counterweight] [auto].${item} \u5DF2\u6253\u5F00\u4F46 .cw/codex.toml \u6CA1\u914D\u5BF9\u5E94\u6A21\u578B\uFF0C\u8BE5\u9879\u89C6\u4E3A\u5173\u95ED`);
     }
     if (project?.sandbox === "none") notes.push('[counterweight] \u89D2\u8272\u5B50\u8FDB\u7A0B\u6CA1\u6709\u6C99\u7BB1\uFF08.cw/codex.toml [roles].sandbox = "none"\uFF09');
   } catch (error) {
-    notes.push(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF1A${message(error)}`);
+    notes.push(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF1A${message2(error)}`);
   }
   const output = {
     hookSpecificOutput: {
@@ -9443,7 +9611,7 @@ Counterweight ${await pluginVersion()} active`
 async function pluginVersion() {
   try {
     const manifest = JSON.parse(await (0, import_promises10.readFile)(
-      import_node_path10.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
+      import_node_path11.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
       "utf8"
     ));
     return typeof manifest.version === "string" ? manifest.version : "unknown";
@@ -9461,168 +9629,55 @@ var deny = (reason) => ({
 async function preToolUse(root, cwd, input) {
   let project;
   try {
-    project = await loadProjectConfig(root);
+    project = await loadProjectConfig(root, "codex.toml");
   } catch {
     return null;
   }
   if (project === null) return null;
-  try {
-    const command = input.tool_input?.command;
-    const paths = typeof command === "string" ? patchPaths(command) : [];
-    if (paths.length === 0) return deny("[counterweight] \u65E0\u6CD5\u4ECE\u8865\u4E01\u4E2D\u89E3\u6790\u51FA\u8DEF\u5F84\uFF0C\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF0C\u5DF2\u62D2\u7EDD\u3002");
-    const realCwd = await realpathOr(cwd);
-    const reasons = [];
-    for (const raw of paths) {
-      const reason = await checkProtectedTarget(root, realCwd, project.protect.paths, raw);
-      if (reason !== null) reasons.push(reason);
-    }
-    if (reasons.length > 0) return deny(reasons.join("\n"));
-    return await pauseBeforeFirstEdit(root, realCwd, project, input, paths);
-  } catch (error) {
-    return deny(`[counterweight] \u4FDD\u62A4\u68C0\u67E5\u51FA\u9519\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${message(error)}`);
-  }
-}
-async function pauseBeforeFirstEdit(root, cwd, project, input, paths) {
-  try {
-    const planner = project.models.planner;
-    if (!project.auto.pause || planner === null || input.agent_id !== void 0) return null;
-    const targets = paths.map((raw) => toRepoRelative(root, cwd, raw)).filter((relative) => isSourceEdit(relative));
-    if (targets.length === 0) return null;
-    const session = input.session_id ?? "";
-    if (!await claim(session, input.turn_id ?? "", "pause")) return null;
-    const started = Date.now();
-    const outcome = async (result) => {
-      await recordEvent(root, session, "pause", { outcome: result, ms: Date.now() - started, tool: "apply_patch" }).catch(() => {
-      });
-    };
-    try {
-      const rollout = await (0, import_promises10.readFile)(input.transcript_path ?? "", "utf8");
-      const body = plannerMessage(
-        renderTranscript(parseTranscript(rollout)),
-        targets.join(", "),
-        "apply_patch",
-        { command: input.tool_input?.command }
-      );
-      const run = await runAndMeter(
-        { repo: root, session, project },
-        "planner",
-        "cw_pause",
-        planner,
-        body,
-        new AbortController().signal
-      );
-      await outcome(run.answer === null ? "failed" : "planned");
-      return run.answer === null ? null : deny(pauseReason(run.answer.trim()));
-    } catch {
-      await outcome("failed");
-      return null;
-    }
-  } catch {
-    return null;
-  }
-}
-async function checkProtectedTarget(root, cwd, patterns, raw) {
-  const lexical = toRepoRelative(root, cwd, raw);
-  if (lexical === null) return `[counterweight] \u8DEF\u5F84\u4E0D\u5728\u4ED3\u5E93\u5185\uFF0C\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${raw}`;
-  if (isProtected(lexical, patterns)) return PROTECTED_REASON(lexical);
-  let resolved;
-  try {
-    resolved = await resolveWriteTarget(root, lexical);
-  } catch (error) {
-    if (isNotFound(error)) return null;
-    return UNVERIFIABLE_REASON(raw);
-  }
-  if (isProtected(resolved, patterns)) {
-    const via = resolved === lexical ? "" : `\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u8BE5\u53D7\u4FDD\u62A4\u6587\u4EF6\uFF09`;
-    return `${PROTECTED_REASON(resolved)}${via}`;
-  }
-  return null;
-}
-function toRepoRelative(repoRoot, cwd, value) {
-  const relative = import_node_path10.default.relative(repoRoot, import_node_path10.default.resolve(cwd, value));
-  if (relative === "" || relative.startsWith("..") || import_node_path10.default.isAbsolute(relative)) return null;
-  return relative.split(import_node_path10.default.sep).join("/");
+  const command = input.tool_input?.command;
+  const paths = typeof command === "string" ? patchPaths(command) : [];
+  const refusal = await checkPaths(root, cwd, project, paths);
+  if (refusal !== null) return deny(refusal);
+  if (input.agent_id !== void 0) return null;
+  const session = input.session_id ?? "";
+  const plan = await pausePlan({
+    root,
+    cwd: await realpathOr(cwd),
+    project,
+    session,
+    paths,
+    tool: "apply_patch",
+    input: { command },
+    runner: runRole,
+    signal: new AbortController().signal,
+    claim: () => claim(session, input.turn_id ?? "", "pause"),
+    transcript: async () => renderTranscript(parseTranscript(await (0, import_promises10.readFile)(input.transcript_path ?? "", "utf8")))
+  });
+  return plan === null ? null : deny(plan);
 }
 async function stop(root, input) {
   let project;
   try {
-    project = await loadProjectConfig(root);
+    project = await loadProjectConfig(root, "codex.toml");
   } catch (error) {
-    return { systemMessage: `[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message(error)}` };
+    return { systemMessage: `[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message2(error)}` };
   }
   if (project === null) return null;
   const session = input.session_id ?? "";
   const turn = input.turn_id ?? "";
-  const texts = [];
-  let checkReport = null;
-  if (project.check !== null) {
-    try {
-      const check = project.check;
-      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
-      const started = Date.now();
-      const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout } });
-      const passed = checkPassed(outcome);
-      const retry = !passed && await claim(session, turn, "repair");
-      let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final: !passed && !retry });
-      if (timeout < check.timeout_s) {
-        report += `
-[counterweight] check.timeout_s=${check.timeout_s} \u8D85\u8FC7\u4E0A\u9650\uFF0C\u5B9E\u9645\u8D85\u65F6 ${timeout}s`;
-      }
-      await recordEvent(root, session, "check", {
-        exit_code: outcome.exitCode,
-        timed_out: outcome.timedOut,
-        spawn_error: outcome.runnerError,
-        ms: Date.now() - started,
-        outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported"
-      }).catch(() => {
-      });
-      if (retry) return { decision: "block", reason: report };
-      checkReport = report;
-    } catch (error) {
-      checkReport = `[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u5B8C\u6210\uFF0C\u672C\u8F6E\u6CA1\u6709\u5F97\u5230\u68C0\u67E5\u7ED3\u8BBA\uFF1A${message(error)}`;
-    }
-    texts.push(checkReport);
+  const result = await endCheck({
+    root,
+    project,
+    session,
+    runner: runRole,
+    signal: new AbortController().signal,
+    claim: (name) => claim(session, turn, name),
+    prompt: () => loadPrompt(session, turn)
+  });
+  if (result.continueWith !== null) {
+    return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? void 0 };
   }
-  const auto = await runAuto(root, project, session, turn, checkReport);
-  if (auto.findings !== null) return { decision: "block", reason: auto.findings, systemMessage: checkReport ?? void 0 };
-  if (auto.text !== null) texts.push(auto.text);
-  return texts.length === 0 ? null : { systemMessage: texts.join("\n\n") };
-}
-async function runAuto(root, project, session, turn, checkLine) {
-  const none = { text: null, findings: null };
-  try {
-    if (!project.auto.review && !project.auto.chronicle) return none;
-    const diff = await workingDiff(root);
-    if (diff === null || diff.trim() === "") return none;
-    const ctx = { repo: root, session, project };
-    const signal = new AbortController().signal;
-    if (project.auto.review) {
-      const prompt = await loadPrompt(session, turn);
-      const body = reviewMessage({ request: prompt, diff });
-      const [correct, over] = await Promise.all([
-        runAndMeter(ctx, "review", "cw_review", project.models.review, body, signal),
-        runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review, body, signal)
-      ]);
-      const findings = [correct, over].map((run) => run.answer?.trim() ?? "").filter((answer) => answer !== "" && answer !== "none" && !answer.startsWith("ASK:"));
-      if (findings.length > 0) {
-        if (await claim(session, turn, "findings")) {
-          return { text: null, findings: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u5904\u7406\u6216\u8BF4\u660E\u4E3A\u4EC0\u4E48\u4E0D\u5904\u7406\uFF1A
-
-${findings.join("\n\n")}` };
-        }
-        return { text: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\uFF08\u7EED\u8DD1\u4E4B\u540E\uFF09\u4ECD\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
-
-${findings.join("\n\n")}`, findings: null };
-      }
-    }
-    if (project.auto.chronicle) {
-      const report = chronicleReport(await loadPrompt(session, turn), changedFiles(diff), checkLine);
-      await chronicle(ctx, project.models.historian, report, signal);
-    }
-    return none;
-  } catch {
-    return none;
-  }
+  return result.report === null ? null : { systemMessage: result.report };
 }
 async function postModelRequest(root, input) {
   const usage = input.token_usage;
@@ -9642,7 +9697,7 @@ async function postModelRequest(root, input) {
   }
 }
 main().then(() => process.exit(0), (error) => {
-  process.stderr.write(`[counterweight] ${message(error)}
+  process.stderr.write(`[counterweight] ${message2(error)}
 `);
   process.exit(0);
 });

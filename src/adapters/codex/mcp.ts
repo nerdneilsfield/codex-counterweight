@@ -8,6 +8,7 @@ import { loadProjectConfig } from "../../core/config.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { realpathOr } from "../../core/paths.js";
 import { MAX_TIMEOUT_S, MIN_TIMEOUT_S } from "../../roles/run.js";
+import { runRole } from "./runner.js";
 import { callRole, ROLES, TIMEOUT_DESCRIPTION } from "../../roles/tools.js";
 
 type Id = string | number;
@@ -64,7 +65,7 @@ async function callTool(request: Request, signal: AbortSignal) {
   const repo = await realpathOr(await repoToplevel(dir) ?? dir);
   let project;
   try {
-    project = await loadProjectConfig(repo);
+    project = await loadProjectConfig(repo, "codex.toml");
   } catch (error) {
     return textResult(`[counterweight] 配置非法，${role.tool} 不可用：${message(error)}`, true);
   }
@@ -73,6 +74,7 @@ async function callTool(request: Request, signal: AbortSignal) {
     repo,
     session: typeof meta.sessionId === "string" ? meta.sessionId : "",
     project,
+    runner: runRole,
   }, role, params.arguments ?? {}, signal));
 }
 

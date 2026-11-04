@@ -1,15 +1,15 @@
 /**
- * 回合状态：hook 是一次性进程，跨 hook 的“每回合一次”标记和用户原话放在 `$PLUGIN_DATA/sessions/<session_id>/`。
+ * 回合状态：hook 是一次性进程，跨 hook 的“每回合一次”标记和用户原话放在 `$PLUGIN_DATA`（Claude Code 是 `$CLAUDE_PLUGIN_DATA`）下的 `sessions/<session_id>/`。
  * 任何文件系统错误都让 `claim` 返回 false，也就是不续跑、不拦截。
  */
 import { mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-type Claim = "repair" | "findings" | "pause";
+export type Claim = "repair" | "findings" | "pause";
 
 /** session_id 含路径分隔符或 `..` 时不可用。 */
 function sessionDir(session: string): string | null {
-  const data = process.env.PLUGIN_DATA;
+  const data = process.env.PLUGIN_DATA ?? process.env.CLAUDE_PLUGIN_DATA;
   if (data === undefined || data === "") return null;
   if (session === "" || session.includes("/") || session.includes("\\") || session.includes("..")) return null;
   return path.join(data, "sessions", session);

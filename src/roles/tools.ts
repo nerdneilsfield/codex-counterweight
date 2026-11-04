@@ -10,13 +10,14 @@ import { writeCwFile } from "../core/cwfile.js";
 import { recordEvent, recordUsage } from "../core/meter.js";
 import { gate } from "../core/router.js";
 import type { RoleName } from "./prompts.js";
-import { clampTimeoutS, MAX_TIMEOUT_S, MIN_TIMEOUT_S, nextTimeoutS, roleTimeoutMs, runRole } from "./run.js";
+import { clampTimeoutS, MAX_TIMEOUT_S, MIN_TIMEOUT_S, nextTimeoutS, roleTimeoutMs, type RoleRunner } from "./run.js";
 
-/** 一次调用所需的环境：仓库根、会话、已读好的配置，以及 MCP 给的 codex 可执行文件。 */
+/** 一次调用所需的环境：仓库根、会话、已读好的配置，以及宿主的角色 runner。 */
 export interface RoleContext {
   repo: string;
   session: string;
   project: ProjectConfig;
+  runner: RoleRunner;
 }
 
 /**
@@ -114,7 +115,7 @@ export async function runAndMeter(
   const configured = ctx.project.timeouts[role];
   const timeoutMs = askedS !== undefined ? askedS * 1000
     : configured !== undefined ? configured * 1000 : roleTimeoutMs(role);
-  const run = await runRole({
+  const run = await ctx.runner({
     role,
     workRoot: repo,
     model,
@@ -135,7 +136,7 @@ export async function runAndMeter(
         output: sample.output,
         cache_read: sample.cacheRead,
         cache_write: sample.cacheWrite,
-        cost_total: null,
+        cost_total: sample.costTotal ?? null,
       });
     } catch (error) {
       meterError ??= error instanceof Error ? error.message : "未知错误";
