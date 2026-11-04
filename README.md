@@ -1,21 +1,129 @@
 # codex-counterweight
 
-给 Codex 加一个收尾动作：每轮结束前运行项目指定的检查，失败就把输出交回模型修一次；同时拦截对受保护路径的 `apply_patch` 写入，注入一段行为约束，并把模型用量记到 `.cw/meter.jsonl`。再提供五个只读角色工具（探索、两种审查、研究、史官），以及收尾时自动审查、自动汇报和首次改源码前的 PAUSE。是 [pi-counterweight](../pi-counterweight) 的 Codex 版。
+English | [简体中文](README.zh-CN.md)
 
-## 安装
+[![Version](https://img.shields.io/badge/version-0.2.0-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
+[![License: MIT](https://img.shields.io/github/license/nerdneilsfield/codex-counterweight)](LICENSE)
+[![Tested with Codex CLI 0.166.0](https://img.shields.io/badge/tested%20with-Codex%20CLI%200.166.0-412991)](https://github.com/openai/codex/releases/tag/rust-v0.166.0)
+[![Node.js >= 22.19](https://img.shields.io/badge/node-%3E%3D22.19-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Tested on Linux](https://img.shields.io/badge/tested%20on-Linux-FCC624?logo=linux&logoColor=black)](#limitations)
+[![Last commit](https://img.shields.io/github/last-commit/nerdneilsfield/codex-counterweight)](https://github.com/nerdneilsfield/codex-counterweight/commits)
+[![Issues](https://img.shields.io/github/issues/nerdneilsfield/codex-counterweight)](https://github.com/nerdneilsfield/codex-counterweight/issues)
 
-```sh
-codex plugin marketplace add nerdneilsfield/codex-counterweight
-codex plugin add codex-counterweight@<marketplace>
+codex-counterweight is a Codex CLI plugin that enforces a project's end-of-turn check. When a turn ends, the plugin runs the command you configured. If the command fails, the plugin returns the output to the model once, and the model gets one more turn to fix the failure. A second failure is reported to you and does not trigger another retry.
+
+The plugin also rejects `apply_patch` writes to paths you protect, injects a set of working instructions into each session, and records model usage. Optional role tools run a separate model for code exploration, review, research, planning, and project history.
+
+This plugin reduces mistakes by a cooperative model. It is not a security boundary: shell commands can still write to protected paths. See [Limitations](#limitations).
+
+It is the Codex counterpart of [pi-counterweight](https://github.com/nerdneilsfield/pi-counterweight), and both tools can share one `.cw/project.toml`.
+
+## Contents
+
+- [Requirements](#requirements)
+- [Quick start](#quick-start)
+- [What the plugin does](#what-the-plugin-does)
+- [Configuration](#configuration)
+- [Role tools](#role-tools)
+- [Automatic runs](#automatic-runs)
+- [Sharing `.cw` with pi](#sharing-cw-with-pi)
+- [Limitations](#limitations)
+- [Troubleshooting](#troubleshooting)
+- [Development](#development)
+
+## Requirements
+
+- Codex CLI. This version was tested with 0.166.0 on Linux. Other versions and platforms are untested.
+- Node.js 22.19 or later, available as `node` on `PATH`.
+- Git. The plugin uses the Git work tree root to find `.cw/`. Outside a Git repository, it uses the current directory.
+
+## Quick start
+
+This walkthrough runs a syntax check in a new practice directory, so it needs no existing project.
+
+1. Add the marketplace and install the plugin:
+
+   ```sh
+   codex plugin marketplace add nerdneilsfield/codex-counterweight
+   codex plugin add codex-counterweight@codex-counterweight
+   ```
+
+2. Create a practice repository:
+
+   ```sh
+   mkdir -p ~/counterweight-demo/.cw
+   cd ~/counterweight-demo
+   git init
+   ```
+
+3. Create `.cw/project.toml` with this content:
+
+   ```toml
+   version = 1
+
+   [check]
+   cmd = ["node", "--check", "hello.js"]
+   ```
+
+4. Start Codex in that directory:
+
+   ```sh
+   codex
+   ```
+
+5. When Codex shows **Hooks need review**, review the hooks and trust them. The plugin does nothing until you trust its hooks.
+
+6. Send this request to Codex:
+
+   ```text
+   Create hello.js that prints Hello, Counterweight!
+   ```
+
+When the turn ends, Codex shows a report similar to the following line. The report text is in Chinese. `结束检查通过` means that the end check passed, and `退出码 0` means exit code 0.
+
+```text
+[counterweight] 结束检查通过：`node --check hello.js` 退出码 0（0.1s）
 ```
 
-装完打开 `/hooks`，确认信任 Counterweight 的 hook。TUI 启动时会提示有 hook 待信任；`codex exec` 不提示，未信任的 hook 直接跳过。插件每次更新都要重新确认。
+To use the plugin in your own project, replace `cmd` with a command that exits on its own, such as `["npm", "test"]`. In a Codex session, you can also run `$cw-setup`, which checks that the hooks are active and helps you write the file.
 
-会话里运行 `$cw-setup` 可以检查 hook 是否生效并生成配置。
+## What the plugin does
 
-## 配置
+The plugin acts on the following Codex hook events.
 
-`.cw/project.toml`：
+| Event | Action | Without `.cw/project.toml` |
+| --- | --- | --- |
+| Session start, `/clear`, compaction | Injects the working instructions. | Same |
+| User prompt | Stores the prompt for automatic reviews. | Same |
+| `apply_patch` | Rejects writes to protected paths. Optionally pauses the first source edit. | Allows every write |
+| Model response | Appends token usage to `.cw/meter.jsonl`. | Same |
+| Turn end | Runs the check, then any automatic runs. | Does nothing |
+
+Two of these actions apply to every repository where the plugin is enabled, even without a configuration file:
+
+- The injected instructions change how the model behaves. They ask for direct answers in Chinese and tell the model to avoid abstractions that no current requirement needs. The text is in [`src/roles/prompts.ts`](src/roles/prompts.ts).
+- The plugin creates `.cw/meter.jsonl` in each repository. Add `.cw/` to the repository's `.gitignore` if you do not want to track this file.
+
+### End check
+
+The plugin runs the check at the end of every completed turn, including turns that only answer a question, so choose a command with an acceptable duration. Only the exit code decides the result. The command runs from the repository root and does not go through a shell, so `npm test && npm run build` is not a valid single command. Put combined checks in a script.
+
+If the check fails, the plugin sends the exit code and up to 80 lines or 16 KiB of each output stream back to the model, then Codex continues the turn. Each turn gets one such retry. If the check fails again, the plugin shows the result and stops.
+
+A check that exceeds its timeout counts as a failure. The plugin sends `SIGTERM` to the check's process group, then `SIGKILL` 5 seconds later. If you interrupt a turn while the check runs, Codex kills the hook, and a watchdog process kills the check. An interrupted check produces no result.
+
+### Protected paths
+
+`.cw/project.toml` and `.cw/codex.toml` are always protected once configuration loads. The plugin rejects the whole patch if any path in the patch is protected, resolves through a symbolic link to a protected path, or is outside the repository. A patch whose paths cannot be parsed is also rejected.
+
+## Configuration
+
+Configuration lives in two files under `.cw/`. Codex hooks read both files on every event, so changes apply to the next event and need no restart. An unknown key in either file makes the whole configuration invalid. When configuration is invalid, the check and path protection stop, and Codex shows the error at session start and at the end of each turn.
+
+### `.cw/project.toml`
+
+This file is shared with pi. Every section is optional except `version`.
 
 ```toml
 version = 1
@@ -23,48 +131,149 @@ version = 1
 [check]
 cmd = ["npm", "test"]
 timeout_s = 600
+env = { CI = "1" }
 
 [protect]
-paths = ["tests", "docs/spec.md"]
+paths = ["tests", "vitest.config.ts"]
+
+[timeouts]
+review = 600
+
+[auto]
+review = false
+chronicle = false
+pause = false
+
+[router]
+url = "http://localhost:11434/v1/systemone"
+model = "nimble"
 ```
 
-`.cw/project.toml` 本身总是受保护。配置每次 hook 都会重新读取，改完立即生效。
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `version` | integer | Required | Must be `1`. |
+| `check.cmd` | string array | Required in `[check]` | Program and arguments. Runs without a shell. |
+| `check.timeout_s` | integer | `600` | Check timeout in seconds. Values above 3570 run as 3570, and the report states the value used. |
+| `check.env` | string table | Empty | Extra environment variables for the check. |
+| `protect.paths` | string array | Required in `[protect]` | Files or directories relative to the repository root. Wildcards, absolute paths, `..`, and paths under `.cw` are rejected. |
+| `timeouts.<role>` | integer | `1800` for `research`, otherwise `300` | Default role timeout in seconds, from 300 to 1800. |
+| `auto.review` | boolean | `false` | See [Automatic runs](#automatic-runs). |
+| `auto.chronicle` | boolean | `false` | See [Automatic runs](#automatic-runs). |
+| `auto.pause` | boolean | `false` | See [Automatic runs](#automatic-runs). |
+| `router.url` | string | Required in `[router]` | Decision model endpoint. |
+| `router.model` | string | Required in `[router]` | Decision model name. |
+| `router.api_key_env` | string | None | Name of the variable that holds the API key. See [Limitations](#limitations). |
+| `router.timeout_ms` | integer | `5000` | Request timeout in milliseconds. |
+| `router.skip_below` | number | `0.1` | Skips a review when the problem probability is at or below this value. |
+| `router.audit_rate` | number | `0.1` | Fraction of skipped reviews that run anyway. |
 
-## 角色和 `[auto]`
+The `[models]` section of this file belongs to pi, and Codex ignores it.
 
-`.cw/codex.toml` 可选，配 Codex 的模型和角色沙箱。`additionalProperties: false`，写错字段整份配置失败：
+### `.cw/codex.toml`
+
+This optional file holds settings that only apply to Codex.
 
 ```toml
-[models]                 # 六个角色：explorer review over_review research historian planner
-review = "gpt-5.6-terra" # Codex 模型 slug，非空且不含空白
+[models]
+explorer = "gpt-5.6-terra"
+review = "gpt-5.6-terra"
+over_review = "gpt-5.6-terra"
+research = "gpt-5.6-terra"
+historian = "gpt-5.6-terra"
+planner = "gpt-5.6-terra"
 
 [roles]
-sandbox = "read-only"    # 或 "none"，缺省 read-only
+sandbox = "read-only"
 ```
 
-插件的 MCP server 提供五个工具：`cw_explore`、`cw_review`、`cw_over_review`、`cw_research`、`cw_chronicle`，没配模型的角色调用时返回不可用。每个工具有可选的 `timeout_s`（300 到 1800），超时后返回里给下一档。角色子进程是 `codex exec --ephemeral`，关掉 hook 和插件，默认 `-s read-only`；`sandbox = "none"` 会让角色子进程没有沙箱，`SessionStart` 会提示。
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `models.<role>` | string | None | Codex model name for the role. A role without a model is unavailable. |
+| `roles.sandbox` | `"read-only"` or `"none"` | `"read-only"` | Sandbox for role subprocesses. |
 
-`project.toml` 的 `[auto]` 在 Codex 下生效：
+`"none"` runs role subprocesses with `--dangerously-bypass-approvals-and-sandbox`, so a role can write files if its model tries to. Codex shows a notice at session start when this value is set. Use `"none"` only on a machine where the Codex sandbox cannot start. The plugin does not fall back to `"none"` automatically.
 
-- `review`：每轮结束时工作树有改动，就并行跑 review 和 over_review。有发现则续跑一次，之后只显示；额度与结束检查的续跑分开计。
-- `chronicle`：没有审查发现时，把本轮摘要交给史官，更新 `.cw/HISTORY.md`。
-- `pause`：每个用户回合第一次对源码的 `apply_patch`（只在根线程）会被拦下一次，planner 读完会话记录给一份计划，计划只是建议。planner 读不到记录、失败或超时都放行。
+The Codex sandbox needs unprivileged user namespaces on Linux. If `kernel.apparmor_restrict_unprivileged_userns` is `1`, `bubblewrap` cannot start and read-only roles cannot read files.
 
-`[auto]` 打开但 `codex.toml` 没配对应模型时，该项视为关闭，`SessionStart` 提示，检查和保护照常运行。这与 pi 版不同：共用文件里合法的 `[auto]` 不应让 Codex 的检查和保护失效。`.cw/codex.toml` 本身也受保护，非法时检查和保护一起停用，`SessionStart` 和 `Stop` 显示错误。
+## Role tools
 
-史官不排队。hook 和 MCP 是不同进程，所以写文档前会再读一次，文档在史官运行期间被改动就不写，返回“请重新汇报”。
+The plugin's MCP server gives the model five tools. Each tool starts a one-shot `codex exec` subprocess that has hooks and plugins disabled. Each tool accepts an optional `timeout_s` from 300 to 1800. After a timeout, the result names the next value to try.
 
-## 与 pi 共用
+| Tool | Input | Result |
+| --- | --- | --- |
+| `cw_explore` | `question` | Locates code and cites `path:line`. |
+| `cw_review` | `request`, `diff` | Reports what the change got wrong. |
+| `cw_over_review` | `request`, `diff` | Reports what the change added without a current need. |
+| `cw_research` | `question` | Answers a question that reading the code did not settle. |
+| `cw_chronicle` | `report` | Rewrites `.cw/HISTORY.md` with the report folded in. |
 
-同一份 `.cw/project.toml` 在 pi 和 Codex 下都合法，未知字段照样报错。`[check]`、`[protect]`、`[timeouts]`、`[auto]`、`[router]` 共用；`[models]` 在 Codex 下忽略，模型写在 `.cw/codex.toml`。
+A reviewer or the historian can reply with `ASK:` and a question instead of a result. The model then answers the question and calls the tool again. The historian writes nothing in that case.
 
-## 限制
+The historian checks `.cw/HISTORY.md` again before writing. If the file changed during the run, the historian discards its result and the tool asks the model to report again. This covers concurrent runs from hooks, MCP, and pi.
 
-- 不是安全边界。bash 可以绕过文件保护，只拦 `apply_patch`。
-- hook 自身崩溃时 Codex 会放行工具调用。
-- 只要配了 `[check]`，每轮结束都会运行检查，包括只是问答的轮次。每轮会显示一行结果，看不到这一行就说明检查没跑，先查 `/hooks`。
-- `check.timeout_s` 超过 3570 秒时按 3570 秒运行，并在结果里注明。
-- 插件升到 0.2.0 后 hook 有变化，需要在 `/hooks` 里重新信任。
-- planner 只关了 shell 和联网，`apply_patch` 有没有关掉没有验证。它只拿到会话记录文本，提示里写明不用工具，这是已知边界。
-- MCP 进程的环境是白名单（`HOME LANG LC_ALL LOGNAME PATH SHELL TERM USER`，加上 `.mcp.json` 列出的 `CODEX_HOME`、`OPENAI_API_KEY`）。`[router].api_key_env` 指向别的变量时，闸门按失败处理，也就是照常审查，只是省不掉调用。
-- `[router]` 闸门只用于手动调用的 `cw_review` 和 `cw_over_review`，`[auto]` 的审查不经过它。
+Tool calls and role usage are recorded in `.cw/meter.jsonl`.
+
+## Automatic runs
+
+By default, the model decides whether to call the role tools. The `[auto]` keys make the plugin run them instead. Each key needs models in `.cw/codex.toml`. If a model is missing, that key is turned off and Codex shows a notice at session start, while the check and path protection continue to work.
+
+| Key | Needs | Behavior |
+| --- | --- | --- |
+| `auto.review` | `review`, `over_review` | At the end of a turn with changes, runs both reviewers in parallel on the diff against `HEAD`. Findings go back to the model once per turn. Later findings are only shown. Diffs longer than 80,000 characters are truncated. |
+| `auto.chronicle` | `historian` | At the end of a turn with changes and no findings, sends a summary of the turn to the historian. |
+| `auto.pause` | `planner` | Rejects the first source edit of each turn, once, and returns a plan from the `planner` role. Edits under `.cw/` and `tmp/` do not count. |
+
+The review and the check are independent: a failed or timed-out automatic run produces no text and never changes the check result. The plan from `auto.pause` is advice. The model can disagree and resend the edit. If the planner fails, times out, or cannot read the session record, the edit goes through.
+
+The check's repair turn and the review's repair turn have separate allowances, so one user turn can continue at most twice.
+
+## Sharing `.cw` with pi
+
+A `.cw/project.toml` that is valid for pi is also valid here. `[check]`, `[protect]`, `[timeouts]`, `[auto]`, and `[router]` apply to both tools. Models differ because pi requires `provider/model` names, so pi reads `[models]` from `project.toml` and Codex reads `[models]` from `codex.toml`. Do not add Codex settings to `project.toml`, because pi rejects unknown keys.
+
+Both tools append to the same `.cw/meter.jsonl` and share `.cw/HISTORY.md`.
+
+The two tools treat an `[auto]` key without a model differently. Codex turns off that key. pi rejects the whole configuration, so a project that uses both tools needs models in both files.
+
+## Limitations
+
+- Path protection covers `apply_patch` only. Shell commands and other tools can still write to protected paths, and the plugin does not report those writes.
+- If the hook process crashes before it returns a decision, Codex allows the tool call.
+- `codex exec` skips untrusted hooks without a notice. The TUI asks you to review them at startup.
+- After an update changes a hook, you need to trust that hook again.
+- The check result depends on the exit code alone. The plugin does not detect skipped or weakened tests.
+- The `planner` role runs without the shell and web search. It was not verified that `apply_patch` is also unavailable to this role, so its restriction also relies on its instructions.
+- `sandbox = "none"` limits a role through its instructions only.
+- The MCP server receives only `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, `CODEX_HOME`, and `OPENAI_API_KEY`. A key that `router.api_key_env` names under any other variable never reaches the server. The router then counts as failed, and the review runs as usual.
+- `[router]` applies to direct `cw_review` and `cw_over_review` calls. `auto.review` always runs the reviewers.
+- The role runner depends on the `codex exec --json` event format. A Codex update can change that format.
+
+## Troubleshooting
+
+| Symptom | Cause | Action |
+| --- | --- | --- |
+| No `[counterweight]` line appears at the end of a turn | The hooks are not trusted, or `[check]` is missing | Open `/hooks` in Codex and trust the hooks. Confirm that `.cw/project.toml` has a `[check]` section. |
+| The report says `配置非法` | A file under `.cw/` has an unknown key or an invalid value | Fix the key named in the message. |
+| The model cannot edit a file under a protected path | The path matches `protect.paths` | Edit the file yourself, or change `protect.paths`. |
+| The model cannot edit `.cw/project.toml` or `.cw/codex.toml` | These files are always protected | Edit the file yourself. |
+| A role tool reports `未配置 [models].<role>` | The role has no model | Add the role to `[models]` in `.cw/codex.toml`. |
+| A role cannot read files | The Codex sandbox cannot start on this machine | Check `kernel.apparmor_restrict_unprivileged_userns`, or set `roles.sandbox = "none"`. |
+| A role reports `未正常结束` | The `codex exec` turn did not complete | Read the reason in the message and call the tool again. |
+| A role reports a timeout | The input took longer than `timeout_s` | Retry with the value in the message. At 1800 seconds, split the input. |
+| `[auto]` does nothing | The key has no model, or the work tree has no changes | Check the notice at session start, and confirm that the turn changed files. |
+
+## Development
+
+```sh
+npm ci
+npm run typecheck
+npm test
+```
+
+`npm test` builds the bundles first. Tests use a fake `codex` executable, so they need no model credentials. The bundles in `plugins/codex-counterweight/dist/` are committed because plugin installation does not run `npm install`. Run `npm run build` before you commit a source change.
+
+The design and measured Codex behavior are recorded in [`docs/superpowers/specs/2026-11-04-codex-counterweight-design.md`](docs/superpowers/specs/2026-11-04-codex-counterweight-design.md) and [`docs/plans/2026-11-04-v2-roles.md`](docs/plans/2026-11-04-v2-roles.md).
+
+## License
+
+[MIT](LICENSE) © DengQi
