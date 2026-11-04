@@ -1,5 +1,5 @@
 /**
- * 受保护路径：项目配置里写死的路径列表，外加 harness 自己的控制面文件 `.cw/project.toml`。
+ * 受保护路径：项目配置里写死的路径列表，外加 harness 自己的控制面文件 `.cw/project.toml` 和 `.cw/codex.toml`。
  * `edit` / `write` 对受保护目标直接拦截。没有内容快照、没有结算时的变化报告。
  *
  * Protected paths: the literal list from the project config plus the harness's
@@ -16,7 +16,7 @@ import path from "node:path";
  * says: the model must not be able to turn the check or the guard off by
  * editing it.
  */
-export const CONFIG_FILE = ".cw/project.toml";
+export const CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml"];
 
 /**
  * 判断一个仓库内相对路径是否属于受保护集合：等于某条路径，或位于某条目录前缀之下。
@@ -30,6 +30,6 @@ export const CONFIG_FILE = ".cw/project.toml";
  */
 export function isProtected(relative: string, patterns: readonly string[]): boolean {
   const normalized = relative.split(path.sep).join("/");
-  if (normalized === CONFIG_FILE) return true;
+  if (CONFIG_FILES.includes(normalized)) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }

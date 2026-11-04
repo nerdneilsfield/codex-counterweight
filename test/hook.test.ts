@@ -5,35 +5,25 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseProjectConfig } from "../src/core/config.js";
-
-const HOOK = path.resolve("plugins/codex-counterweight/dist/hook.js");
+import { childEnv, HOOK, runHook as runHookIn, writeConfig as writeConfigFile, type Sandbox } from "./support.js";
 
 let repo: string;
+let sandbox: Sandbox;
 
 beforeEach(async () => {
   repo = await mkdtemp(path.join(tmpdir(), "cw-hook-"));
+  const data = await mkdtemp(path.join(tmpdir(), "cw-data-"));
+  sandbox = { repo, data, bin: path.join(data, "bin") };
   execFileSync("git", ["init", "-q"], { cwd: repo });
 });
 
 afterEach(async () => {
   await rm(repo, { recursive: true, force: true });
+  await rm(sandbox.data, { recursive: true, force: true });
 });
 
-async function writeConfig(text: string): Promise<void> {
-  await mkdir(path.join(repo, ".cw"), { recursive: true });
-  await writeFile(path.join(repo, ".cw", "project.toml"), text);
-}
-
-function runHook(input: Record<string, unknown>): Promise<{ out: unknown; stdout: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("node", [HOOK], { stdio: ["pipe", "pipe", "inherit"] });
-    let stdout = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.once("error", reject);
-    child.once("close", () => resolve({ out: stdout === "" ? null : JSON.parse(stdout), stdout }));
-    child.stdin.end(JSON.stringify({ cwd: repo, session_id: "s1", ...input }));
-  });
-}
+const writeConfig = (text: string) => writeConfigFile(repo, "project.toml", text);
+const runHook = (input: Record<string, unknown>) => runHookIn(sandbox, input);
 
 const patch = (...lines: string[]) => ["*** Begin Patch", ...lines, "*** End Patch"].join("\n");
 const preTool = (command: string) => runHook({
@@ -116,11 +106,42 @@ model = "jev"
 review = 600
 `);
     expect(project.check?.cmd).toEqual(["npm", "test"]);
-    expect(project.autoRequested).toBe(true);
+    expect(project.auto.review).toBe(false);
+    expect(project.autoSkipped).toEqual(["review"]);
   });
 
   it("rejects an unknown key", () => {
     expect(() => parseProjectConfig("version = 1\n[explorer]\nx = 1\n")).toThrow();
+  });
+});
+
+describe("codex.toml", () => {
+  const PI_AUTO = 'version = 1\n[check]\ncmd = ["sh", "-c", "echo ran; exit 0"]\n[auto]\nreview = true\n';
+  const writeCodex = (text: string) => writeConfigFile(repo, "codex.toml", text);
+
+  it("keeps the check running when [auto] lacks a model, and says so at SessionStart", async () => {
+    await writeConfig(PI_AUTO);
+    const start = await runHook({ hook_event_name: "SessionStart" });
+    expect(start.out.systemMessage).toContain("[auto].review");
+    const { out } = await runHook({ hook_event_name: "Stop" });
+    expect(out.systemMessage).toContain("通过");
+  });
+
+  it("protects codex.toml itself", async () => {
+    await writeConfig("version = 1\n");
+    await writeCodex('[models]\nreview = "m"\n');
+    const { out } = await preTool(patch("*** Update File: .cw/codex.toml", "@@"));
+    expect(denied(out)).toBe(true);
+  });
+
+  it("stops the check and reports when codex.toml is invalid", async () => {
+    await writeConfig(PI_AUTO);
+    await writeCodex('[models]\nreview = "has space"\n');
+    const start = await runHook({ hook_event_name: "SessionStart" });
+    expect(start.out.systemMessage).toContain("codex.toml");
+    const { out } = await runHook({ hook_event_name: "Stop" });
+    expect(out.systemMessage).toContain("未运行检查");
+    expect(out.systemMessage).toContain("codex.toml");
   });
 });
 
@@ -158,7 +179,7 @@ describe("process groups", () => {
   it("kills the check when the hook's process group is SIGKILLed", async () => {
     const pidFile = path.join(repo, "sleep.pid");
     await writeConfig(`version = 1\n[check]\ncmd = ["sh", "-c", "sleep 300 & echo $! > ${pidFile}; wait"]\n`);
-    const hook = spawn("node", [HOOK], { detached: true, stdio: ["pipe", "ignore", "ignore"] });
+    const hook = spawn("node", [HOOK], { detached: true, stdio: ["pipe", "ignore", "ignore"], env: childEnv(sandbox) });
     hook.stdin.end(JSON.stringify({ cwd: repo, session_id: "s1", hook_event_name: "Stop", stop_hook_active: false }));
     let sleepPid = 0;
     await until(() => {

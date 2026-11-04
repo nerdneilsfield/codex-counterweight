@@ -37,7 +37,7 @@ type Output = Record<string, unknown> | null;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const PROTECTED_REASON = (relative: string) => `[counterweight] ${relative} 是受保护路径`
-  + "（.cw/project.toml 或项目配置 [protect].paths）；如需修改请由用户手动完成。";
+  + "（.cw/project.toml、.cw/codex.toml 或项目配置 [protect].paths）；如需修改请由用户手动完成。";
 
 const UNVERIFIABLE_REASON = (value: string) =>
   `[counterweight] 路径无法核对受保护集合（符号链接逃逸仓库或不可解析），已拒绝：${value}`;
@@ -62,7 +62,10 @@ async function sessionStart(root: string): Promise<Output> {
   const notes: string[] = [];
   try {
     const project = await loadProjectConfig(root);
-    if (project?.autoRequested) notes.push("[counterweight] [auto] 尚未支持");
+    for (const item of project?.autoSkipped ?? []) {
+      notes.push(`[counterweight] [auto].${item} 已打开但 .cw/codex.toml 没配对应模型，该项视为关闭`);
+    }
+    if (project?.sandbox === "none") notes.push("[counterweight] 角色子进程没有沙箱（.cw/codex.toml [roles].sandbox = \"none\"）");
   } catch (error) {
     notes.push(`[counterweight] 配置非法：${message(error)}`);
   }

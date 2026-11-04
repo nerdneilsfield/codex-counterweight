@@ -8575,6 +8575,7 @@ function rejectUnknown(schema, value, kind) {
 
 // src/core/config.ts
 var ModelName = { type: "string", minLength: 1, pattern: "^[^/\\s]+/[^\\s]+$" };
+var CodexModel = { type: "string", minLength: 1, pattern: "^[^\\s]+$" };
 var projectSchema = {
   type: "object",
   additionalProperties: false,
@@ -8646,17 +8647,44 @@ var projectSchema = {
   }
 };
 var DEFAULT_TIMEOUT_S = 600;
+var codexSchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    models: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        explorer: CodexModel,
+        review: CodexModel,
+        over_review: CodexModel,
+        research: CodexModel,
+        historian: CodexModel,
+        planner: CodexModel
+      }
+    },
+    roles: {
+      type: "object",
+      additionalProperties: false,
+      properties: { sandbox: { enum: ["read-only", "none"] } }
+    }
+  }
+};
 async function loadProjectConfig(repo) {
-  let text;
+  const project = await readOptional(repo, "project.toml");
+  const codex = await readOptional(repo, "codex.toml");
+  if (project === null && codex === null) return null;
+  return parseProjectConfig(project ?? "version = 1\n", codex ?? "");
+}
+async function readOptional(repo, name) {
   try {
-    text = await (0, import_promises4.readFile)(import_node_path3.default.join(repo, ".cw", "project.toml"), "utf8");
+    return await (0, import_promises4.readFile)(import_node_path3.default.join(repo, ".cw", name), "utf8");
   } catch (error) {
     if (isNotFound(error)) return null;
-    throw new Error(`project.toml: ${error instanceof Error ? error.message : "unreadable"}`);
+    throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
   }
-  return parseProjectConfig(text);
 }
-function parseProjectConfig(text) {
+function parseProjectConfig(text, codexText = "") {
   let parsed;
   try {
     parsed = parse(text);
@@ -8664,7 +8692,30 @@ function parseProjectConfig(text) {
     throw new Error(`project.toml: ${error instanceof Error ? error.message : "unparsable"}`);
   }
   rejectUnknown(projectSchema, parsed, "project.toml");
+  let codexParsed;
+  try {
+    codexParsed = parse(codexText);
+  } catch (error) {
+    throw new Error(`codex.toml: ${error instanceof Error ? error.message : "unparsable"}`);
+  }
+  rejectUnknown(codexSchema, codexParsed, "codex.toml");
   const value = parsed;
+  const codex = codexParsed;
+  const models = {
+    explorer: codex.models?.explorer ?? null,
+    review: codex.models?.review ?? null,
+    over_review: codex.models?.over_review ?? null,
+    research: codex.models?.research ?? null,
+    historian: codex.models?.historian ?? null,
+    planner: codex.models?.planner ?? null
+  };
+  const wants = { review: false, chronicle: false, pause: false, ...value.auto };
+  const auto = {
+    review: wants.review && models.review !== null && models.over_review !== null,
+    chronicle: wants.chronicle && models.historian !== null,
+    pause: wants.pause && models.planner !== null
+  };
+  const autoSkipped = ["review", "chronicle", "pause"].filter((key) => wants[key] && !auto[key]);
   return {
     version: 1,
     check: value.check === void 0 ? null : {
@@ -8673,7 +8724,19 @@ function parseProjectConfig(text) {
       env: value.check.env ?? {}
     },
     protect: { paths: (value.protect?.paths ?? []).map(normalizeProtectedPath) },
-    autoRequested: Object.values(value.auto ?? {}).some((flag) => flag === true)
+    models,
+    timeouts: { ...value.timeouts },
+    auto,
+    autoSkipped,
+    router: value.router === void 0 ? null : {
+      url: value.router.url,
+      api_key_env: value.router.api_key_env ?? null,
+      model: value.router.model,
+      timeout_ms: value.router.timeout_ms ?? 5e3,
+      skip_below: value.router.skip_below ?? 0.1,
+      audit_rate: value.router.audit_rate ?? 0.1
+    },
+    sandbox: codex.roles?.sandbox ?? "read-only"
   };
 }
 function normalizeProtectedPath(value) {
@@ -8762,10 +8825,10 @@ async function recordEvent(repo, session, event, detail = {}) {
 
 // src/core/protect.ts
 var import_node_path5 = __toESM(require("node:path"), 1);
-var CONFIG_FILE = ".cw/project.toml";
+var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml"];
 function isProtected(relative, patterns) {
   const normalized = relative.split(import_node_path5.default.sep).join("/");
-  if (normalized === CONFIG_FILE) return true;
+  if (CONFIG_FILES.includes(normalized)) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
@@ -8806,7 +8869,7 @@ function patchPaths(text) {
 // src/adapters/codex/hook.ts
 var MAX_CHECK_TIMEOUT_S = 3570;
 var message = (error) => error instanceof Error ? error.message : String(error);
-var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml \u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
+var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/codex.toml \u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
 var UNVERIFIABLE_REASON = (value) => `[counterweight] \u8DEF\u5F84\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF08\u7B26\u53F7\u94FE\u63A5\u9003\u9038\u4ED3\u5E93\u6216\u4E0D\u53EF\u89E3\u6790\uFF09\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${value}`;
 async function main() {
   const chunks = [];
@@ -8836,7 +8899,10 @@ async function sessionStart(root) {
   const notes = [];
   try {
     const project = await loadProjectConfig(root);
-    if (project?.autoRequested) notes.push("[counterweight] [auto] \u5C1A\u672A\u652F\u6301");
+    for (const item of project?.autoSkipped ?? []) {
+      notes.push(`[counterweight] [auto].${item} \u5DF2\u6253\u5F00\u4F46 .cw/codex.toml \u6CA1\u914D\u5BF9\u5E94\u6A21\u578B\uFF0C\u8BE5\u9879\u89C6\u4E3A\u5173\u95ED`);
+    }
+    if (project?.sandbox === "none") notes.push('[counterweight] \u89D2\u8272\u5B50\u8FDB\u7A0B\u6CA1\u6709\u6C99\u7BB1\uFF08.cw/codex.toml [roles].sandbox = "none"\uFF09');
   } catch (error) {
     notes.push(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF1A${message(error)}`);
   }
