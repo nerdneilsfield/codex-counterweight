@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/adapters/codex/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/hook.cjs && esbuild src/adapters/codex/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/mcp.cjs && esbuild src/adapters/claude/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/hook.cjs && esbuild src/adapters/claude/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/mcp.cjs",
+    "build": "esbuild src/adapters/codex/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/hook.cjs && esbuild src/adapters/codex/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/mcp.cjs && esbuild src/adapters/claude/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/hook.cjs && esbuild src/adapters/claude/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/mcp.cjs && esbuild src/adapters/opencode/index.ts --bundle --platform=node --target=node22 --format=esm --loader:.md=text --outfile=plugins/opencode-counterweight/index.js",
     "test": "npm run build && vitest run"
   },
   "devDependencies": {
@@ -18,5 +18,6 @@
     "typebox": "1.3.27",
     "typescript": "7.0.2",
     "vitest": "5.0.5"
-  }
+  },
+  "exports": "./plugins/opencode-counterweight/index.js"
 }

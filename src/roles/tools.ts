@@ -71,6 +71,21 @@ export const ROLES: Array<{
 
 export const TIMEOUT_DESCRIPTION = `本次调用的超时秒数（${MIN_TIMEOUT_S}–${MAX_TIMEOUT_S}，越界会被夹住）。按输入大小估：小输入不传，用默认 ${MIN_TIMEOUT_S}；明显很大（长 diff、跨很多文件）就先设长一些。超时后返回里会给下一档（每次翻倍），照着重试；已到 ${MAX_TIMEOUT_S} 还超时就拆小输入，别再加。`;
 
+const timeoutField = { type: "integer", minimum: MIN_TIMEOUT_S, maximum: MAX_TIMEOUT_S, description: TIMEOUT_DESCRIPTION };
+const string = { type: "string", minLength: 1 };
+
+export function toolInputSchema(input: (typeof ROLES)[number]["input"]) {
+  const fields = input === "question" ? { question: string }
+    : input === "report" ? { report: string }
+    : { request: string, diff: string };
+  return {
+    type: "object",
+    properties: { ...fields, timeout_s: timeoutField },
+    required: Object.keys(fields),
+    additionalProperties: false,
+  };
+}
+
 const HISTORY_FILE = "HISTORY.md";
 
 /** 执行一个角色工具，返回给调用方的文本。 */

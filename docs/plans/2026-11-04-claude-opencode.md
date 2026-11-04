@@ -139,7 +139,7 @@ type RoleRunner = (request: RoleRequest) => Promise<RoleRun>;
 
 - [x] T1
 - [x] T2
-- [ ] T3
+- [x] T3
 - [ ] T4
 - [ ] T5
 

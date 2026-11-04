@@ -8483,24 +8483,6 @@ function git(repo, args) {
   });
 }
 
-// src/roles/run.ts
-var ROLE_TIMEOUT_MS = 3e5;
-var RESEARCH_TIMEOUT_MS = 18e5;
-function roleTimeoutMs(role) {
-  return role === "research" ? RESEARCH_TIMEOUT_MS : ROLE_TIMEOUT_MS;
-}
-var MIN_TIMEOUT_S = 300;
-var MAX_TIMEOUT_S = 1800;
-function clampTimeoutS(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
-  return Math.min(MAX_TIMEOUT_S, Math.max(MIN_TIMEOUT_S, Math.round(value)));
-}
-function nextTimeoutS(usedMs) {
-  const used = Math.round(usedMs / 1e3);
-  if (used >= MAX_TIMEOUT_S) return null;
-  return Math.min(MAX_TIMEOUT_S, used * 2);
-}
-
 // src/roles/tools.ts
 var import_promises5 = require("node:fs/promises");
 var import_node_path5 = __toESM(require("node:path"), 1);
@@ -8597,6 +8579,24 @@ async function gate(router, role, state, signal, random = Math.random) {
   }
 }
 
+// src/roles/run.ts
+var ROLE_TIMEOUT_MS = 3e5;
+var RESEARCH_TIMEOUT_MS = 18e5;
+function roleTimeoutMs(role) {
+  return role === "research" ? RESEARCH_TIMEOUT_MS : ROLE_TIMEOUT_MS;
+}
+var MIN_TIMEOUT_S = 300;
+var MAX_TIMEOUT_S = 1800;
+function clampTimeoutS(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return void 0;
+  return Math.min(MAX_TIMEOUT_S, Math.max(MIN_TIMEOUT_S, Math.round(value)));
+}
+function nextTimeoutS(usedMs) {
+  const used = Math.round(usedMs / 1e3);
+  if (used >= MAX_TIMEOUT_S) return null;
+  return Math.min(MAX_TIMEOUT_S, used * 2);
+}
+
 // src/roles/tools.ts
 function timeoutAdvice(tool, usedMs) {
   const next = nextTimeoutS(usedMs);
@@ -8635,6 +8635,17 @@ var ROLES = [
   }
 ];
 var TIMEOUT_DESCRIPTION = `\u672C\u6B21\u8C03\u7528\u7684\u8D85\u65F6\u79D2\u6570\uFF08${MIN_TIMEOUT_S}\u2013${MAX_TIMEOUT_S}\uFF0C\u8D8A\u754C\u4F1A\u88AB\u5939\u4F4F\uFF09\u3002\u6309\u8F93\u5165\u5927\u5C0F\u4F30\uFF1A\u5C0F\u8F93\u5165\u4E0D\u4F20\uFF0C\u7528\u9ED8\u8BA4 ${MIN_TIMEOUT_S}\uFF1B\u660E\u663E\u5F88\u5927\uFF08\u957F diff\u3001\u8DE8\u5F88\u591A\u6587\u4EF6\uFF09\u5C31\u5148\u8BBE\u957F\u4E00\u4E9B\u3002\u8D85\u65F6\u540E\u8FD4\u56DE\u91CC\u4F1A\u7ED9\u4E0B\u4E00\u6863\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF09\uFF0C\u7167\u7740\u91CD\u8BD5\uFF1B\u5DF2\u5230 ${MAX_TIMEOUT_S} \u8FD8\u8D85\u65F6\u5C31\u62C6\u5C0F\u8F93\u5165\uFF0C\u522B\u518D\u52A0\u3002`;
+var timeoutField = { type: "integer", minimum: MIN_TIMEOUT_S, maximum: MAX_TIMEOUT_S, description: TIMEOUT_DESCRIPTION };
+var string = { type: "string", minLength: 1 };
+function toolInputSchema(input) {
+  const fields = input === "question" ? { question: string } : input === "report" ? { report: string } : { request: string, diff: string };
+  return {
+    type: "object",
+    properties: { ...fields, timeout_s: timeoutField },
+    required: Object.keys(fields),
+    additionalProperties: false
+  };
+}
 var HISTORY_FILE = "HISTORY.md";
 async function callRole(ctx, role, params, signal) {
   const model = ctx.project.models[role.name];
@@ -8777,21 +8788,10 @@ ${body.slice(0, 200)}`;
 
 // src/adapters/mcp.ts
 var message = (error) => error instanceof Error ? error.message : String(error);
-var timeoutField = { type: "integer", minimum: MIN_TIMEOUT_S, maximum: MAX_TIMEOUT_S, description: TIMEOUT_DESCRIPTION };
-var string = { type: "string", minLength: 1 };
-function inputSchema(input) {
-  const fields = input === "question" ? { question: string } : input === "report" ? { report: string } : { request: string, diff: string };
-  return {
-    type: "object",
-    properties: { ...fields, timeout_s: timeoutField },
-    required: Object.keys(fields),
-    additionalProperties: false
-  };
-}
 var TOOLS = ROLES.map((role) => ({
   name: role.tool,
   description: role.description,
-  inputSchema: inputSchema(role.input)
+  inputSchema: toolInputSchema(role.input)
 }));
 var pending = /* @__PURE__ */ new Map();
 var inflight = /* @__PURE__ */ new Set();

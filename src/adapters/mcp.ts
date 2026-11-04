@@ -6,8 +6,8 @@ import { createInterface } from "node:readline";
 import { loadProjectConfig, type HostFile } from "../core/config.js";
 import { repoToplevel } from "../core/gitstate.js";
 import { realpathOr } from "../core/paths.js";
-import { MAX_TIMEOUT_S, MIN_TIMEOUT_S, type RoleRunner } from "../roles/run.js";
-import { callRole, ROLES, TIMEOUT_DESCRIPTION } from "../roles/tools.js";
+import type { RoleRunner } from "../roles/run.js";
+import { callRole, ROLES, toolInputSchema } from "../roles/tools.js";
 
 type Id = string | number;
 interface Request {
@@ -24,23 +24,8 @@ interface Request {
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
-const timeoutField = { type: "integer", minimum: MIN_TIMEOUT_S, maximum: MAX_TIMEOUT_S, description: TIMEOUT_DESCRIPTION };
-const string = { type: "string", minLength: 1 };
-
-function inputSchema(input: (typeof ROLES)[number]["input"]) {
-  const fields = input === "question" ? { question: string }
-    : input === "report" ? { report: string }
-    : { request: string, diff: string };
-  return {
-    type: "object",
-    properties: { ...fields, timeout_s: timeoutField },
-    required: Object.keys(fields),
-    additionalProperties: false,
-  };
-}
-
 const TOOLS = ROLES.map((role) => ({
-  name: role.tool, description: role.description, inputSchema: inputSchema(role.input),
+  name: role.tool, description: role.description, inputSchema: toolInputSchema(role.input),
 }));
 
 const pending = new Map<string, AbortController>();
