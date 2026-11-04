@@ -10,11 +10,13 @@ import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordEvent, recordUsage } from "../../core/meter.js";
 import { isNotFound, realpathOr, resolveWriteTarget } from "../../core/paths.js";
+import { isSourceEdit, pauseReason, plannerMessage, renderTranscript } from "../../core/pause.js";
 import { isProtected } from "../../core/protect.js";
 import { claim, endSession, loadPrompt, savePrompt } from "../../core/turnstate.js";
 import { sessionSection } from "../../roles/prompts.js";
 import { chronicle, reviewMessage, runAndMeter, type RoleContext } from "../../roles/tools.js";
 import { patchPaths } from "./patch.js";
+import { parseTranscript } from "./transcript.js";
 
 /** hooks.json 给 Stop 的 timeout 是 7200 秒：检查最多 3570 秒，自动运行最多 3600 秒（每个角色有自己的超时）。 */
 const MAX_CHECK_TIMEOUT_S = 3570;
@@ -27,6 +29,7 @@ interface HookInput {
   turn_id?: string;
   prompt?: string;
   agent_id?: string;
+  transcript_path?: string;
   tool_input?: { command?: unknown };
   status?: string;
   token_usage?: {
@@ -125,9 +128,45 @@ async function preToolUse(root: string, cwd: string, input: HookInput): Promise<
       const reason = await checkProtectedTarget(root, realCwd, project.protect.paths, raw);
       if (reason !== null) reasons.push(reason);
     }
-    return reasons.length > 0 ? deny(reasons.join("\n")) : null;
+    if (reasons.length > 0) return deny(reasons.join("\n"));
+    return await pauseBeforeFirstEdit(root, realCwd, project, input, paths);
   } catch (error) {
     return deny(`[counterweight] 保护检查出错，已拒绝：${message(error)}`);
+  }
+}
+
+/**
+ * PAUSE：本回合第一次对源码的编辑，拦下它，让 planner 读完调查写一份计划。只在根线程拦。
+ * 任何失败（没有记录、planner 失败或超时）都放行这次编辑；先 claim 再请求，失败也不会让同一回合被反复拦。
+ */
+async function pauseBeforeFirstEdit(
+  root: string, cwd: string, project: ProjectConfig, input: HookInput, paths: string[],
+): Promise<Output> {
+  try {
+    const planner = project.models.planner;
+    if (!project.auto.pause || planner === null || input.agent_id !== undefined) return null;
+    const targets = paths.map((raw) => toRepoRelative(root, cwd, raw)).filter((relative) => isSourceEdit(relative));
+    if (targets.length === 0) return null;
+    const session = input.session_id ?? "";
+    if (!await claim(session, input.turn_id ?? "", "pause")) return null;
+    const started = Date.now();
+    const outcome = async (result: string) => {
+      await recordEvent(root, session, "pause", { outcome: result, ms: Date.now() - started, tool: "apply_patch" }).catch(() => {});
+    };
+    try {
+      const rollout = await readFile(input.transcript_path ?? "", "utf8");
+      const body = plannerMessage(
+        renderTranscript(parseTranscript(rollout)), targets.join(", "), "apply_patch", { command: input.tool_input?.command });
+      const run = await runAndMeter(
+        { repo: root, session, project }, "planner", "cw_pause", planner, body, new AbortController().signal);
+      await outcome(run.answer === null ? "failed" : "planned");
+      return run.answer === null ? null : deny(pauseReason(run.answer.trim()));
+    } catch {
+      await outcome("failed");
+      return null;
+    }
+  } catch {
+    return null;
   }
 }
 

@@ -344,10 +344,10 @@ function renderCheckReport(outcome, options) {
   appendTail(lines, "\u6807\u51C6\u9519\u8BEF", outcome.stderrTail, outcome.stderrTruncated);
   return lines.join("\n");
 }
-function appendTail(lines, label, text, truncated) {
-  if (text === "") return;
+function appendTail(lines, label, text2, truncated) {
+  if (text2 === "") return;
   lines.push(`${label}\uFF08\u5C3E\u90E8${truncated ? "\uFF0C\u5DF2\u622A\u65AD" : ""}\uFF09\uFF1A`);
-  lines.push(text);
+  lines.push(text2);
 }
 async function readTail(file) {
   let chunk;
@@ -8762,10 +8762,10 @@ async function readOptional(repo, name) {
     throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
   }
 }
-function parseProjectConfig(text, codexText = "") {
+function parseProjectConfig(text2, codexText = "") {
   let parsed;
   try {
-    parsed = parse(text);
+    parsed = parse(text2);
   } catch (error) {
     throw new Error(`project.toml: ${error instanceof Error ? error.message : "unparsable"}`);
   }
@@ -8869,6 +8869,92 @@ async function recordEvent(repo, session, event, detail = {}) {
     await appendMeterLine(repo, record);
   } catch {
   }
+}
+
+// src/core/pause.ts
+var SCRATCH_PREFIXES = [".cw/", "tmp/"];
+function isSourceEdit(relative) {
+  if (relative === null) return false;
+  return !SCRATCH_PREFIXES.some((prefix) => relative === prefix.slice(0, -1) || relative.startsWith(prefix));
+}
+var TRANSCRIPT_BUDGET = 6e4;
+var TOOL_RESULT_CAP = 2e3;
+function renderTranscript(messages, budget = TRANSCRIPT_BUDGET) {
+  const blocks = [];
+  for (const message2 of messages) {
+    const block = renderMessage(message2);
+    if (block !== "") blocks.push(block);
+  }
+  let total = 0;
+  let start = blocks.length;
+  while (start > 0 && total + blocks[start - 1].length <= budget) {
+    start -= 1;
+    total += blocks[start].length;
+  }
+  const dropped = start;
+  const kept = blocks.slice(start).join("\n\n");
+  return dropped === 0 ? kept : `\uFF08\u66F4\u65E9\u7684 ${dropped} \u6BB5\u8BB0\u5F55\u56E0\u8D85\u51FA\u957F\u5EA6\u9884\u7B97\u88AB\u7701\u7565\uFF09
+
+${kept}`;
+}
+function renderMessage(message2) {
+  switch (message2.role) {
+    case "user":
+      return `[\u7528\u6237]
+${textOf(message2.content)}`;
+    case "assistant":
+      return renderAssistant(message2.content);
+    case "toolResult": {
+      const body = textOf(message2.content);
+      const cut = body.length > TOOL_RESULT_CAP ? `${body.slice(0, TOOL_RESULT_CAP)}
+\u2026\uFF08\u5DF2\u622A\u65AD\uFF09` : body;
+      return `[\u5DE5\u5177\u7ED3\u679C ${message2.toolName ?? ""}]
+${cut}`;
+    }
+    case "bashExecution":
+      return `[bash] ${message2.command ?? ""}
+${(message2.output ?? "").slice(0, TOOL_RESULT_CAP)}`;
+    case "compactionSummary":
+    case "branchSummary":
+      return `[\u6B64\u524D\u7684\u6458\u8981]
+${message2.summary ?? ""}`;
+    default:
+      return "";
+  }
+}
+function renderAssistant(content) {
+  if (!Array.isArray(content)) return "";
+  const parts = [];
+  for (const block of content) {
+    if (block === null || typeof block !== "object") continue;
+    const item = block;
+    if (item.type === "text" && typeof item.text === "string" && item.text.trim() !== "") parts.push(item.text);
+    if (item.type === "toolCall" && typeof item.name === "string") {
+      parts.push(`\u8C03\u7528 ${item.name} ${JSON.stringify(item.arguments ?? {}).slice(0, 400)}`);
+    }
+  }
+  return parts.length === 0 ? "" : `[\u52A9\u624B]
+${parts.join("\n")}`;
+}
+function textOf(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((block) => block !== null && typeof block === "object" && block.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n");
+}
+function plannerMessage(transcript, target, tool, input) {
+  return `\u5230\u76EE\u524D\u4E3A\u6B62\u7684\u8BB0\u5F55\uFF1A
+
+${transcript}
+
+---
+\u5B83\u6B63\u8981\u505A\u7684\u7B2C\u4E00\u6B21\u6E90\u7801\u7F16\u8F91\uFF1A${tool} ${target}
+${JSON.stringify(input).slice(0, 1500)}
+`;
+}
+function pauseReason(plan) {
+  return `[counterweight] \u8FD9\u662F\u672C\u56DE\u5408\u7B2C\u4E00\u6B21\u6539\u6E90\u7801\uFF0C\u5DF2\u5148\u8BF7 planner \u8BFB\u5B8C\u8C03\u67E5\u5199\u4E86\u4E00\u4EFD\u8BA1\u5212\u3002\u8BA1\u5212\u53EA\u662F\u5EFA\u8BAE\uFF1A\u4F60\u770B\u5F97\u5230\u4EE3\u7801\uFF0C\u5B83\u770B\u4E0D\u5230\u3002\u4E0D\u540C\u610F\u5C31\u8BF4\u660E\u54EA\u91CC\u4E0D\u540C\u610F\uFF0C\u7136\u540E\u7167\u4F60\u7684\u5224\u65AD\u91CD\u65B0\u53D1\u8D77\u8FD9\u6B21\u7F16\u8F91\uFF0C\u8FD9\u7C7B\u62E6\u622A\u672C\u56DE\u5408\u4E0D\u4F1A\u518D\u51FA\u73B0\u3002
+
+${plan}`;
 }
 
 // src/core/protect.ts
@@ -9057,7 +9143,7 @@ async function runRole(request) {
       try {
         stdout = await (0, import_promises8.readFile)(import_node_path8.default.join(scratch, "stdout.jsonl"), "utf8");
       } catch (error) {
-        return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
+        return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf2(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
       }
       const events = parseEvents(stdout);
       const failure = (reason) => ({ answer: null, error: reason, usage: events.usage, timedOut: outcome.timedOut, cancelled: outcome.cancelled });
@@ -9104,7 +9190,7 @@ function parseEvents(stdout) {
   }
   return { answer, completed, usage };
 }
-function textOf(error) {
+function textOf2(error) {
   return error instanceof Error ? error.message : "unreadable";
 }
 
@@ -9228,13 +9314,63 @@ ${body.slice(0, 200)}`;
 
 // src/adapters/codex/patch.ts
 var PATH_LINE = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/;
-function patchPaths(text) {
+function patchPaths(text2) {
   const found = /* @__PURE__ */ new Set();
-  for (const line of text.split("\n")) {
+  for (const line of text2.split("\n")) {
     const match = PATH_LINE.exec(line.replace(/\r$/, ""));
     if (match !== null && match[1].trim() !== "") found.add(match[1].trim());
   }
   return [...found];
+}
+
+// src/adapters/codex/transcript.ts
+var text = (value) => [{ type: "text", text: value }];
+function blocksText(content) {
+  if (!Array.isArray(content)) return "";
+  return content.map((block) => block !== null && typeof block === "object" ? block.text : void 0).filter((part) => typeof part === "string").join("\n");
+}
+function parseTranscript(rollout) {
+  const messages = [];
+  const names = /* @__PURE__ */ new Map();
+  for (const line of rollout.split("\n")) {
+    if (line.trim() === "") continue;
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const payload = entry?.payload;
+    if (entry?.type !== "response_item" || payload === null || typeof payload !== "object") continue;
+    switch (payload.type) {
+      case "message":
+        if (payload.role === "user" || payload.role === "assistant") {
+          messages.push({ role: payload.role, content: text(blocksText(payload.content)) });
+        }
+        break;
+      case "function_call":
+      case "custom_tool_call": {
+        const name = String(payload.name ?? "");
+        if (typeof payload.call_id === "string") names.set(payload.call_id, name);
+        messages.push({
+          role: "assistant",
+          content: [{ type: "toolCall", name, arguments: payload.type === "function_call" ? payload.arguments : payload.input }]
+        });
+        break;
+      }
+      case "function_call_output":
+      case "custom_tool_call_output": {
+        const output = typeof payload.output === "string" ? payload.output : JSON.stringify(payload.output ?? "");
+        messages.push({
+          role: "toolResult",
+          toolName: names.get(String(payload.call_id)) ?? "",
+          content: text(output)
+        });
+        break;
+      }
+    }
+  }
+  return messages;
 }
 
 // src/adapters/codex/hook.ts
@@ -9333,9 +9469,49 @@ async function preToolUse(root, cwd, input) {
       const reason = await checkProtectedTarget(root, realCwd, project.protect.paths, raw);
       if (reason !== null) reasons.push(reason);
     }
-    return reasons.length > 0 ? deny(reasons.join("\n")) : null;
+    if (reasons.length > 0) return deny(reasons.join("\n"));
+    return await pauseBeforeFirstEdit(root, realCwd, project, input, paths);
   } catch (error) {
     return deny(`[counterweight] \u4FDD\u62A4\u68C0\u67E5\u51FA\u9519\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${message(error)}`);
+  }
+}
+async function pauseBeforeFirstEdit(root, cwd, project, input, paths) {
+  try {
+    const planner = project.models.planner;
+    if (!project.auto.pause || planner === null || input.agent_id !== void 0) return null;
+    const targets = paths.map((raw) => toRepoRelative(root, cwd, raw)).filter((relative) => isSourceEdit(relative));
+    if (targets.length === 0) return null;
+    const session = input.session_id ?? "";
+    if (!await claim(session, input.turn_id ?? "", "pause")) return null;
+    const started = Date.now();
+    const outcome = async (result) => {
+      await recordEvent(root, session, "pause", { outcome: result, ms: Date.now() - started, tool: "apply_patch" }).catch(() => {
+      });
+    };
+    try {
+      const rollout = await (0, import_promises10.readFile)(input.transcript_path ?? "", "utf8");
+      const body = plannerMessage(
+        renderTranscript(parseTranscript(rollout)),
+        targets.join(", "),
+        "apply_patch",
+        { command: input.tool_input?.command }
+      );
+      const run = await runAndMeter(
+        { repo: root, session, project },
+        "planner",
+        "cw_pause",
+        planner,
+        body,
+        new AbortController().signal
+      );
+      await outcome(run.answer === null ? "failed" : "planned");
+      return run.answer === null ? null : deny(pauseReason(run.answer.trim()));
+    } catch {
+      await outcome("failed");
+      return null;
+    }
+  } catch {
+    return null;
   }
 }
 async function checkProtectedTarget(root, cwd, patterns, raw) {

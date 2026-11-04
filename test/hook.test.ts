@@ -193,6 +193,67 @@ describe("auto review", () => {
   }, 30_000);
 });
 
+describe("PAUSE", () => {
+  let transcript: string;
+  const line = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });
+
+  beforeEach(async () => {
+    await writeConfig('version = 1\n[protect]\npaths = ["tests"]\n[auto]\npause = true\n');
+    await writeConfigFile(repo, "codex.toml", '[models]\nplanner = "pl"\n');
+    transcript = path.join(repo, "rollout.jsonl");
+    await writeFile(transcript, [
+      line({ type: "message", role: "developer", content: [{ type: "input_text", text: "SECRET-DEV" }] }),
+      line({ type: "message", role: "user", content: [{ type: "input_text", text: "修一下 a 的 bug" }] }),
+      line({ type: "function_call", name: "shell", arguments: "{\"cmd\":\"cat src/a.ts\"}", call_id: "c1" }),
+      line({ type: "function_call_output", call_id: "c1", output: "export const a = 1;" }),
+      "not json",
+    ].join("\n"));
+  });
+
+  const edit = (file: string, extra: Record<string, unknown> = {}) => runHook({
+    hook_event_name: "PreToolUse", tool_name: "apply_patch", transcript_path: transcript,
+    tool_input: { command: patch(`*** Update File: ${file}`, "@@") }, ...extra,
+  });
+
+  it("denies the first source edit of a turn with the plan, once", async () => {
+    await installFakeCodex(sandbox, { default: { answer: "根因：x" } });
+    const first = await edit("src/a.ts");
+    expect(denied(first.out)).toBe(true);
+    expect(first.out.hookSpecificOutput.permissionDecisionReason).toContain("根因：x");
+    const [call] = await fakeCalls(sandbox);
+    expect(call!.stdin).toContain("修一下 a 的 bug");
+    expect(call!.stdin).toContain("export const a = 1;");
+    expect(call!.stdin).not.toContain("SECRET-DEV");
+    expect((await edit("src/a.ts")).stdout).toBe("");
+    expect(denied((await edit("src/a.ts", { turn_id: "t2" })).out)).toBe(true);
+  });
+
+  it("lets the edit through when the planner fails, and does not ask again", async () => {
+    await installFakeCodex(sandbox, { default: { mode: "noturn" } });
+    expect((await edit("src/a.ts")).stdout).toBe("");
+    expect((await edit("src/a.ts")).stdout).toBe("");
+    expect(await fakeCalls(sandbox)).toHaveLength(1);
+  });
+
+  it("lets the edit through when there is no transcript", async () => {
+    await installFakeCodex(sandbox, { default: { answer: "根因：x" } });
+    expect((await edit("src/a.ts", { transcript_path: "" })).stdout).toBe("");
+  });
+
+  it("protects before it pauses", async () => {
+    await installFakeCodex(sandbox, { default: { answer: "根因：x" } });
+    const { out } = await edit("tests/a.ts");
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("受保护路径");
+    expect(await fakeCalls(sandbox)).toHaveLength(0);
+  });
+
+  it("ignores sub-agents", async () => {
+    await installFakeCodex(sandbox, { default: { answer: "根因：x" } });
+    expect((await edit("src/a.ts", { agent_id: "sub1" })).stdout).toBe("");
+    expect(await fakeCalls(sandbox)).toHaveLength(0);
+  });
+});
+
 describe("PostModelRequest", () => {
   it("records input without the cached part", async () => {
     await runHook({
