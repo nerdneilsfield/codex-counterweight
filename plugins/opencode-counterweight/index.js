@@ -9853,6 +9853,32 @@ function makeRunner(session, parentID, roleSessions, steps) {
 // src/adapters/opencode/setup.md
 var setup_default = 'Set up or repair Counterweight in the current repository. Follow these steps in order.\n\n1. Ask the user for the check command (run at the end of every turn; only the exit code counts) and the paths to protect from direct edits. Suggest running the command by hand once first to confirm it passes.\n2. If `.cw/project.toml` does not exist, write it. If it already exists, do not edit it and do not bypass the protection through the shell: the plugin refuses edits to it on purpose. Show the user the suggested change and let them edit the file themselves. The same holds for `.cw/opencode.toml`: write it only when it does not exist, never modify an existing one.\n3. If the user wants the role tools (`cw_explore`, `cw_review`, `cw_over_review`, `cw_research`, `cw_chronicle`) or `[auto]`, ask which model each role should use, written as `provider/model`, and write `.cw/opencode.toml` (see the second example). A role without a model is unavailable, and an `[auto]` item in `project.toml` whose model is missing is switched off, not an error. Roles cannot edit files or run shell commands; the planner has no tools.\n4. Suggest adding `.cw/` to `.gitignore`. The user decides.\n5. Tell the user the config takes effect at the next turn, with no restart needed. On OpenCode a passing check shows nothing: they confirm it in `.cw/meter.jsonl`.\n\nMinimal file:\n\n```toml\nversion = 1\n\n[check]\ncmd = ["npm", "test"]\n\n[protect]\npaths = ["tests"]\n```\n\nOptional `.cw/opencode.toml`:\n\n```toml\n[models]\nreview = "anthropic/claude-sonnet-4-5"\nover_review = "anthropic/claude-sonnet-4-5"\n```\n';
 
+// package.json
+var package_default = {
+  name: "codex-counterweight",
+  version: "0.1.0",
+  private: true,
+  type: "module",
+  engines: {
+    node: ">=22.19.0"
+  },
+  scripts: {
+    typecheck: "tsc --noEmit",
+    bundle: "esbuild src/adapters/codex/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/hook.cjs && esbuild src/adapters/codex/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/mcp.cjs && esbuild src/adapters/claude/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/hook.cjs && esbuild src/adapters/claude/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/mcp.cjs && esbuild src/adapters/opencode/index.ts --bundle --platform=node --target=node22 --format=esm --loader:.md=text --outfile=plugins/opencode-counterweight/index.js",
+    test: "npm run bundle && vitest run",
+    "check:sync": "node scripts/check-sync.mjs"
+  },
+  devDependencies: {
+    "@types/node": "^22.0.0",
+    esbuild: "^0.28.0",
+    "smol-toml": "1.9.1",
+    typebox: "1.3.27",
+    typescript: "7.0.2",
+    vitest: "5.0.5"
+  },
+  exports: "./plugins/opencode-counterweight/index.js"
+};
+
 // src/adapters/opencode/index.ts
 var message2 = (error) => error instanceof Error ? error.message : String(error);
 var RELAY = (report) => `[counterweight] \u4E0B\u9762\u662F\u672C\u8F6E\u7684\u7ED3\u675F\u68C0\u67E5\u62A5\u544A\u3002\u8BF7\u539F\u6837\u8F6C\u544A\u7528\u6237\uFF0C\u4E0D\u8981\u4FEE\u6539\u6587\u4EF6\uFF0C\u4E5F\u4E0D\u8981\u518D\u8FD0\u884C\u68C0\u67E5\uFF1A
@@ -9865,6 +9891,7 @@ async function setupPlugin(ctx) {
   const models = /* @__PURE__ */ new Map();
   const parents = /* @__PURE__ */ new Map();
   const roleSessions = /* @__PURE__ */ new Map();
+  const injected = /* @__PURE__ */ new Set();
   const steps = /* @__PURE__ */ new Map();
   const running = /* @__PURE__ */ new Map();
   const lifetime = new AbortController();
@@ -9915,10 +9942,20 @@ async function setupPlugin(ctx) {
     }
     if (await isChild(event.sessionID)) return;
     const project = await load().catch(() => null);
+    const goal = await readGoal(root);
     event.system.push({
       type: "text",
-      text: withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), await readGoal(root))
+      text: withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), goal)
     });
+    if (!injected.has(event.sessionID)) {
+      injected.add(event.sessionID);
+      await recordEvent(root, event.sessionID, "inject", {
+        host: "opencode",
+        version: package_default.version,
+        goal: goalPart(goal) !== null,
+        check: project?.check != null
+      });
+    }
   });
   await ctx.session.hook("prompt", async (event) => {
     if (roleSessions.has(event.sessionID)) return;

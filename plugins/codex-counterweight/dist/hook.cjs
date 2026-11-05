@@ -10071,14 +10071,16 @@ async function sessionStart(root, session, source) {
   }
   const goal = await readGoal(root);
   await rememberGoal(session, goal);
+  const version = await pluginVersion();
   const output = {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
       additionalContext: `${withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), goal)}
 
-Counterweight ${await pluginVersion()} active`
+Counterweight ${version} active`
     }
   };
+  await recordEvent(root, session, "inject", { host: "codex", version, goal: goalPart(goal) !== null, check: project?.check != null });
   if (notes.length > 0) output.systemMessage = notes.join("\n");
   return output;
 }

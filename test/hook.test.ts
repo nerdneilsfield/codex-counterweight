@@ -550,3 +550,26 @@ describe("dangerous commands and scope", () => {
     expect((await preTool(patch("*** Add File: lib/a.ts", "+x"))).stdout).toBe("");
   });
 });
+
+describe("inject event", () => {
+  const events = async () => (await readFile(path.join(repo, ".cw/meter.jsonl"), "utf8").catch(() => ""))
+    .split("\n").filter((line) => line !== "").map((line) => JSON.parse(line)).filter((line) => line.event === "inject");
+
+  it("records host, plugin version, goal and check at every SessionStart that injects", async () => {
+    const manifest = JSON.parse(await readFile(path.resolve("plugins/codex-counterweight/.codex-plugin/plugin.json"), "utf8"));
+    await runHook({ hook_event_name: "SessionStart", source: "startup" });
+    await writeConfig('version = 1\n[check]\ncmd = ["true"]\n');
+    await writeFile(path.join(repo, ".cw/goal.md"), "只改 a\n");
+    await runHook({ hook_event_name: "SessionStart", source: "compact" });
+    const [first, second] = await events();
+    expect(first.detail).toEqual({ host: "codex", version: manifest.version, goal: false, check: false });
+    expect(second.detail).toEqual({ host: "codex", version: manifest.version, goal: true, check: true });
+  });
+
+  it("counts a blank goal as no goal", async () => {
+    await mkdir(path.join(repo, ".cw"), { recursive: true });
+    await writeFile(path.join(repo, ".cw/goal.md"), " \n\n");
+    await runHook({ hook_event_name: "SessionStart", source: "startup" });
+    expect((await events())[0].detail.goal).toBe(false);
+  });
+});

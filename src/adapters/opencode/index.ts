@@ -8,16 +8,17 @@ import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, pausePlan } from "../../core/flow.js";
 import { readGoal } from "../../core/goal.js";
 import { repoToplevel } from "../../core/gitstate.js";
-import { recordUsage } from "../../core/meter.js";
+import { recordEvent, recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
 import { renderTranscript } from "../../core/pause.js";
 import type { Claim } from "../../core/turnstate.js";
-import { rolePrompt, sessionSection, withGoal, type RoleName } from "../../roles/prompts.js";
+import { goalPart, rolePrompt, sessionSection, withGoal, type RoleName } from "../../roles/prompts.js";
 import { callRole, ROLES, toolInputSchema } from "../../roles/tools.js";
 import { patchPaths } from "../codex/patch.js";
 import { makeRunner, type SessionApi, type StepWatch } from "./runner.js";
 import setup from "./setup.md";
 import { toTranscript } from "./transcript.js";
+import pkg from "../../../package.json" with { type: "json" };
 
 /** 插件用到的 ctx 部分，字段名按 `@opencode/plugin` v2.2.5。 */
 export interface Ctx {
@@ -47,6 +48,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
   const models = new Map<string, string>();
   const parents = new Map<string, boolean>();
   const roleSessions = new Map<string, RoleName>();
+  const injected = new Set<string>();
   const steps: StepWatch = new Map();
   const running = new Map<string, Set<AbortController>>();
   const lifetime = new AbortController();
@@ -99,10 +101,18 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
     }
     if (await isChild(event.sessionID)) return;
     const project = await load().catch(() => null);
+    const goal = await readGoal(root);
     event.system.push({
       type: "text",
-      text: withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), await readGoal(root)),
+      text: withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), goal),
     });
+    // 每个会话第一次注入时记一条，评测读它判断是否真的注入了。OpenCode 没有显示通道，缺 [check] 也只记在这里。
+    if (!injected.has(event.sessionID)) {
+      injected.add(event.sessionID);
+      await recordEvent(root, event.sessionID, "inject", {
+        host: "opencode", version: pkg.version, goal: goalPart(goal) !== null, check: project?.check != null,
+      });
+    }
   });
 
   await ctx.session.hook("prompt", async (event) => {

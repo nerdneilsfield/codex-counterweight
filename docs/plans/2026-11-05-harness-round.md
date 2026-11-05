@@ -94,6 +94,6 @@ Plan readiness: ready。
 - [x] 2 角色成本
 - [x] 3 `[auto]` 失败可见
 - [x] 4 高危命令和范围锁定
-- [ ] 5 `inject` 事件
+- [x] 5 `inject` 事件
 - [ ] 6 chronicle 事件
 - [ ] 7 待批条数和 gitignore

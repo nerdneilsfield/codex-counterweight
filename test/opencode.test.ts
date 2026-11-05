@@ -415,8 +415,9 @@ describe("metering and setup", () => {
       type: "session.step.ended",
       data: { sessionID: "root", cost: 0.5, tokens: { input: 10, output: 4, reasoning: 0, cache: { read: 100, write: 5 } } },
     });
-    await until(async () => (await meterLines()).length > 0, 5_000);
-    expect((await meterLines())[0]).toMatchObject({
+    const usage = async () => (await meterLines()).filter((line) => line.kind === "usage");
+    await until(async () => (await usage()).length > 0, 5_000);
+    expect((await usage())[0]).toMatchObject({
       kind: "usage", session: "root", model: "prov/m", input: 10, output: 4, cache_read: 100, cache_write: 5, cost_total: 0.5,
     });
   });
@@ -487,5 +488,30 @@ describe("dangerous commands and scope", () => {
     await expect(before(fake, "edit", { path: "lib/a.ts" })).rejects.toThrow("scope.txt");
     await expect(before(fake, "patch", { patchText: "*** Begin Patch\n*** Add File: lib/a.ts\n+x\n*** End Patch" })).rejects.toThrow("lib/a.ts");
     await expect(before(fake, "write", { path: ".cw/scope.txt", content: "" })).rejects.toThrow("受保护路径");
+  });
+});
+
+describe("inject event", () => {
+  it("records one event per top-level session, with the package version, goal and check", async () => {
+    const pkg = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
+    await project('version = 1\n[check]\ncmd = ["true"]\n');
+    await mkdir(path.join(repo, ".cw"), { recursive: true });
+    await writeFile(path.join(repo, ".cw/goal.md"), "只改 a\n");
+    const fake = await start();
+    fake.sessions.set("sub", { parentID: "root", prompts: [], interrupted: false });
+    for (const sessionID of ["root", "root", "sub"]) {
+      await fake.fire("context", { sessionID, model: model("prov", "m"), system: [] });
+    }
+    const events = (await meterLines()).filter((line) => line.event === "inject");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      session: "root", detail: { host: "opencode", version: pkg.version, goal: true, check: true },
+    });
+  });
+
+  it("records check: false when nothing is configured", async () => {
+    const fake = await start();
+    await fake.fire("context", { sessionID: "root", model: model("prov", "m"), system: [] });
+    expect((await meterLines()).find((line) => line.event === "inject").detail).toMatchObject({ goal: false, check: false });
   });
 });

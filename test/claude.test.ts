@@ -334,3 +334,15 @@ describe("dangerous commands and scope", () => {
     expect((await edit("lib/a.ts")).stdout).toBe("");
   });
 });
+
+describe("inject event", () => {
+  it("records host, plugin version, goal and check at SessionStart", async () => {
+    const manifest = JSON.parse(await readFile(path.resolve("plugins/claude-counterweight/.claude-plugin/plugin.json"), "utf8"));
+    await project('version = 1\n[check]\ncmd = ["true"]\n');
+    await mkdir(path.join(repo, ".cw"), { recursive: true });
+    await writeFile(path.join(repo, ".cw/goal.md"), "只改 a\n");
+    await hook({ hook_event_name: "SessionStart", source: "startup" });
+    const [event] = (await meterLines()).filter((line) => line.event === "inject");
+    expect(event.detail).toEqual({ host: "claude", version: manifest.version, goal: true, check: true });
+  });
+});

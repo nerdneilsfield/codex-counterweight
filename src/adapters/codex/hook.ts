@@ -9,12 +9,12 @@ import { dangerousCommand } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, missingCheckNotice, pausePlan } from "../../core/flow.js";
 import { repoToplevel } from "../../core/gitstate.js";
-import { recordUsage } from "../../core/meter.js";
+import { recordEvent, recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
 import { renderTranscript } from "../../core/pause.js";
 import { goalUpdate, readGoal, rememberGoal } from "../../core/goal.js";
 import { claim, endSession, loadActions, loadBase, loadPrompt, recordAction, saveBase, savePrompt } from "../../core/turnstate.js";
-import { sessionSection, withGoal } from "../../roles/prompts.js";
+import { goalPart, sessionSection, withGoal } from "../../roles/prompts.js";
 import { patchPaths } from "./patch.js";
 import { runRole } from "./runner.js";
 import { parseTranscript } from "./transcript.js";
@@ -97,12 +97,15 @@ async function sessionStart(root: string, session: string, source: string | unde
   }
   const goal = await readGoal(root);
   await rememberGoal(session, goal);
+  const version = await pluginVersion();
   const output: Record<string, unknown> = {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: `${withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), goal)}\n\nCounterweight ${await pluginVersion()} active`,
+      additionalContext: `${withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), goal)}\n\nCounterweight ${version} active`,
     },
   };
+  // 评测读这个事件判断是否真的注入了。
+  await recordEvent(root, session, "inject", { host: "codex", version, goal: goalPart(goal) !== null, check: project?.check != null });
   if (notes.length > 0) output.systemMessage = notes.join("\n");
   return output;
 }
