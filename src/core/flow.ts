@@ -96,6 +96,14 @@ export async function checkGoalPaths(root: string, cwd: string, paths: string[])
   }
 }
 
+/**
+ * 会话真正开始时（startup、clear）的一行提示：没有 `project.toml` 或没有 `[check]`，结束检查不会运行。
+ * 配置非法由宿主另行报告，不走这里。
+ */
+export const missingCheckNotice = (project: ProjectConfig | null, setup: string): string | null =>
+  project?.check != null ? null
+    : `[counterweight] 结束检查没有配置（${project === null ? "没有 .cw/project.toml" : ".cw/project.toml 里没有 [check]"}），回合结束时不会跑检查。运行 ${setup} 配置，或在 .cw/project.toml 写 [check] cmd = ["..."]。`;
+
 export interface EndCheckResult {
   /** 非空表示要续跑，内容交给模型。 */
   continueWith: string | null;

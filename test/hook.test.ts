@@ -455,3 +455,26 @@ describe("process groups", () => {
     expect((out as any).reason).toContain("超时");
   }, 30_000);
 });
+
+describe("missing [check] notice", () => {
+  const start = (source: string) => runHook({ hook_event_name: "SessionStart", source });
+
+  it("says so at startup and clear when there is no project.toml or no [check]", async () => {
+    for (const source of ["startup", "clear"]) {
+      expect((await start(source)).out.systemMessage).toContain("结束检查没有配置");
+    }
+    await writeConfig("version = 1\n");
+    expect((await start("startup")).out.systemMessage).toContain("没有 [check]");
+  });
+
+  it("stays quiet on compact and resume, with a [check], and with an invalid config", async () => {
+    expect((await start("compact")).out.systemMessage).toBeUndefined();
+    expect((await start("resume")).out.systemMessage).toBeUndefined();
+    await writeConfig('version = 1\n[check]\ncmd = ["true"]\n');
+    expect((await start("startup")).out.systemMessage).toBeUndefined();
+    await writeConfig("version = 2\n");
+    const invalid = (await start("startup")).out.systemMessage as string;
+    expect(invalid).toContain("配置非法");
+    expect(invalid).not.toContain("结束检查没有配置");
+  });
+});

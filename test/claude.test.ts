@@ -278,3 +278,20 @@ describe("runRole", () => {
     expect(call!.stdin).toBe("要求");
   });
 });
+
+describe("missing [check] notice", () => {
+  const start = (source: string) => hook({ hook_event_name: "SessionStart", source });
+
+  it("says so at startup and clear only, and names the namespaced setup command", async () => {
+    const out = (await start("startup")).out.systemMessage as string;
+    expect(out).toContain("结束检查没有配置");
+    expect(out).toContain("/counterweight:cw-setup");
+    expect((await start("clear")).out.systemMessage).toContain("结束检查没有配置");
+    expect((await start("compact")).out.systemMessage).toBeUndefined();
+    expect((await start("resume")).out.systemMessage).toBeUndefined();
+    await project("version = 1\n");
+    expect((await start("startup")).out.systemMessage).toContain("没有 [check]");
+    await project('version = 1\n[check]\ncmd = ["true"]\n');
+    expect((await start("startup")).out.systemMessage).toBeUndefined();
+  });
+});

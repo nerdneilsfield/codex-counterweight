@@ -9237,6 +9237,7 @@ async function checkGoalPaths(root, cwd, paths) {
     return null;
   }
 }
+var missingCheckNotice = (project, setup) => project?.check != null ? null : `[counterweight] \u7ED3\u675F\u68C0\u67E5\u6CA1\u6709\u914D\u7F6E\uFF08${project === null ? "\u6CA1\u6709 .cw/project.toml" : ".cw/project.toml \u91CC\u6CA1\u6709 [check]"}\uFF09\uFF0C\u56DE\u5408\u7ED3\u675F\u65F6\u4E0D\u4F1A\u8DD1\u68C0\u67E5\u3002\u8FD0\u884C ${setup} \u914D\u7F6E\uFF0C\u6216\u5728 .cw/project.toml \u5199 [check] cmd = ["..."]\u3002`;
 async function endCheck(params) {
   const { root, project, session, signal } = params;
   const texts = [];
@@ -9758,7 +9759,7 @@ async function main() {
   let output = null;
   switch (input.hook_event_name) {
     case "SessionStart":
-      output = await sessionStart(root, input.session_id ?? "");
+      output = await sessionStart(root, input.session_id ?? "", input.source);
       break;
     case "PreToolUse":
       output = await preToolUse(root, cwd, input);
@@ -9796,11 +9797,13 @@ async function userPrompt(root, input) {
   const additionalContext = await goalUpdate(root, session).catch(() => null);
   return additionalContext === null ? null : { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } };
 }
-async function sessionStart(root, session) {
+async function sessionStart(root, session, source) {
   const notes = [];
   let project = null;
   try {
     project = await loadProjectConfig(root, "codex.toml");
+    const missing = source === "startup" || source === "clear" ? missingCheckNotice(project, "$cw-setup") : null;
+    if (missing !== null) notes.push(missing);
     for (const item of project?.autoSkipped ?? []) {
       notes.push(`[counterweight] [auto].${item} \u5DF2\u6253\u5F00\u4F46 .cw/codex.toml \u6CA1\u914D\u5BF9\u5E94\u6A21\u578B\uFF0C\u8BE5\u9879\u89C6\u4E3A\u5173\u95ED`);
     }

@@ -6,7 +6,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { snapshotTree } from "../../core/auto.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
-import { checkGoalPaths, checkPaths, endCheck, pausePlan } from "../../core/flow.js";
+import { checkGoalPaths, checkPaths, endCheck, missingCheckNotice, pausePlan } from "../../core/flow.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
@@ -20,6 +20,7 @@ import { parseTranscript } from "./transcript.js";
 
 interface HookInput {
   hook_event_name?: string;
+  source?: string;
   cwd?: string;
   session_id?: string;
   model?: string;
@@ -50,7 +51,7 @@ async function main(): Promise<void> {
   const root = await realpathOr(await repoToplevel(cwd) ?? cwd);
   let output: Output = null;
   switch (input.hook_event_name) {
-    case "SessionStart": output = await sessionStart(root, input.session_id ?? ""); break;
+    case "SessionStart": output = await sessionStart(root, input.session_id ?? "", input.source); break;
     case "PreToolUse": output = await preToolUse(root, cwd, input); break;
     case "Stop": output = await stop(root, input); break;
     case "UserPromptSubmit": output = await userPrompt(root, input); break;
@@ -78,11 +79,14 @@ async function userPrompt(root: string, input: HookInput): Promise<Output> {
   return additionalContext === null ? null : { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } };
 }
 
-async function sessionStart(root: string, session: string): Promise<Output> {
+async function sessionStart(root: string, session: string, source: string | undefined): Promise<Output> {
   const notes: string[] = [];
   let project: ProjectConfig | null = null;
   try {
     project = await loadProjectConfig(root, "codex.toml");
+    // 只在会话真正开始时提示；compact 是同一个会话，不再重复。
+    const missing = source === "startup" || source === "clear" ? missingCheckNotice(project, "$cw-setup") : null;
+    if (missing !== null) notes.push(missing);
     for (const item of project?.autoSkipped ?? []) {
       notes.push(`[counterweight] [auto].${item} 已打开但 .cw/codex.toml 没配对应模型，该项视为关闭`);
     }
