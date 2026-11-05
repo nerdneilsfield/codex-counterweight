@@ -25,6 +25,9 @@ export const goalHash = (goal: string | null): string =>
 
 export const GOAL_REMOVED = "The user removed .cw/goal.md. The earlier goal no longer applies.";
 
+/** 旧目标还留在历史里，不说明取代关系，模型会同时遵守新旧两份。 */
+const GOAL_REPLACED = "This replaces any earlier goal in this conversation.";
+
 /** SessionStart 之后记下注入过的目标。 */
 export async function rememberGoal(session: string, goal: string | null): Promise<void> {
   await saveGoalHash(session, goalHash(goal));
@@ -41,5 +44,5 @@ export async function goalUpdate(repo: string, session: string): Promise<string 
   const part = goalPart(goal);
   if (stored === null ? part === null : stored === hash) return null;
   await saveGoalHash(session, hash);
-  return part ?? GOAL_REMOVED;
+  return part === null ? GOAL_REMOVED : `${GOAL_REPLACED}\n\n${part}`;
 }

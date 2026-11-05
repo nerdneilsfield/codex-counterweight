@@ -9511,6 +9511,7 @@ async function readGoal(repo) {
 }
 var goalHash = (goal) => (0, import_node_crypto.createHash)("sha256").update(goalPart(goal) === null ? "" : goal).digest("hex");
 var GOAL_REMOVED = "The user removed .cw/goal.md. The earlier goal no longer applies.";
+var GOAL_REPLACED = "This replaces any earlier goal in this conversation.";
 async function rememberGoal(session, goal) {
   await saveGoalHash(session, goalHash(goal));
 }
@@ -9521,7 +9522,9 @@ async function goalUpdate(repo, session) {
   const part = goalPart(goal);
   if (stored === null ? part === null : stored === hash) return null;
   await saveGoalHash(session, hash);
-  return part ?? GOAL_REMOVED;
+  return part === null ? GOAL_REMOVED : `${GOAL_REPLACED}
+
+${part}`;
 }
 
 // src/adapters/codex/patch.ts
