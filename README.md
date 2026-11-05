@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
 [![License: MIT](https://img.shields.io/github/license/nerdneilsfield/codex-counterweight)](LICENSE)
 [![Tested with Codex CLI 0.166.0](https://img.shields.io/badge/tested%20with-Codex%20CLI%200.166.0-412991)](https://github.com/openai/codex/releases/tag/rust-v0.166.0)
 [![Tested with Claude Code 2.1.318](https://img.shields.io/badge/tested%20with-Claude%20Code%202.1.318-D97757)](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.318)
@@ -31,6 +31,7 @@ It is the Codex, Claude Code, and OpenCode counterpart of [pi-counterweight](htt
 - [Configuration](#configuration)
 - [Role tools](#role-tools)
 - [Automatic runs](#automatic-runs)
+- [Guards and records](#guards-and-records)
 - [Sharing `.cw` with pi](#sharing-cw-with-pi)
 - [Limitations](#limitations)
 - [Troubleshooting](#troubleshooting)
@@ -171,6 +172,9 @@ Before a larger task, write the scope in `.cw/goal.md`, for example `Only change
 ### Read the result
 
 - A `[counterweight]` line appears at the end of each turn when `[check]` is set. If the line is missing, the check did not run. OpenCode is the exception: a passing check shows nothing there, so read `.cw/meter.jsonl`.
+- At the start of a session (startup and clear, not compaction or resume), Codex and Claude Code show one line when there is no `.cw/project.toml` or no `[check]`, because then no check runs at the end of a turn. OpenCode has no display channel for this, so it only records `"check": false` in the `inject` event.
+- When `.cw/pending.md` has entries, the end-of-turn line ends with `待批 N 条` (N lessons waiting for your approval). Without a check result it is a line of its own. OpenCode does not show it, because that would cost an extra model call.
+- When an automatic review role could not finish, one line says so: `[counterweight] 自动审查未完成：<role> <reason>`. It never changes the check result and never continues the turn. OpenCode asks the model to relay it once, which costs one extra model call.
 - A report that says the check failed and will not retry means that the repair turn did not fix it. Send a new request, or fix the problem yourself. A new request gets a new repair turn.
 - Review findings are reports, not verdicts. The model fixes them or explains why it does not, and they never change the check result.
 - `.cw/meter.jsonl` records usage, checks, role calls, and PAUSE decisions. `.cw/HISTORY.md` holds the project history that the historian writes.
@@ -204,10 +208,16 @@ The plugin acts on the following events of each host.
 | Appends token usage to `.cw/meter.jsonl` | Model response | Transcript scan at turn end and session end | Finished step |
 | Runs the check, then any automatic runs | Turn end | Turn end | Session idle |
 
-Without `.cw/project.toml`, the plugin allows every write except a write to `.cw/goal.md`, and does nothing at the end of a turn. Two actions still apply to every repository where the plugin is enabled:
+Without `.cw/project.toml`, the plugin allows every write except a write to `.cw/goal.md` or `.cw/scope.txt` (and a write outside an active scope), refuses the dangerous shell commands below, and runs no check at the end of a turn. Two actions still apply to every repository where the plugin is enabled:
 
 - The injected instructions change how the model behaves. They ask for direct answers in Chinese and tell the model to avoid abstractions that no current requirement needs. The text is in [`src/roles/prompts.ts`](src/roles/prompts.ts).
-- The plugin creates `.cw/meter.jsonl` in each repository. Add `.cw/` to the repository's `.gitignore` if you do not want to track this file.
+- The plugin creates `.cw/meter.jsonl` in each repository. To keep the local files out of git but still track the shared practice notes, put this in `.gitignore`:
+
+  ```gitignore
+  /.cw/*
+  !/.cw/PRACTICES.md
+  !/.cw/BUGS.md
+  ```
 
 ### End check
 
@@ -219,7 +229,7 @@ A check that exceeds its timeout counts as a failure. The plugin sends `SIGTERM`
 
 ### Protected paths
 
-`.cw/project.toml`, `.cw/goal.md`, `.cw/codex.toml`, `.cw/claude.toml`, and `.cw/opencode.toml` are always protected once configuration loads, on every host. `.cw/goal.md` is protected even when `.cw/project.toml` is missing or invalid, because the plugin injects it without any configuration. The plugin rejects the whole call if any path in it is protected, resolves through a symbolic link to a protected path, or is outside the repository. A call whose paths cannot be parsed is also rejected.
+`.cw/project.toml`, `.cw/goal.md`, `.cw/scope.txt`, `.cw/codex.toml`, `.cw/claude.toml`, and `.cw/opencode.toml` are always protected once configuration loads, on every host. `.cw/goal.md` and `.cw/scope.txt` are protected even when `.cw/project.toml` is missing or invalid, because the plugin acts on them without any configuration. The plugin rejects the whole call if any path in it is protected, resolves through a symbolic link to a protected path, or is outside the repository. A call whose paths cannot be parsed is also rejected.
 
 ### Goal file
 
@@ -364,6 +374,18 @@ The review and the check are independent: a failed or timed-out automatic run pr
 
 The check's repair turn and the review's repair turn have separate allowances, so one user turn can continue at most twice. On OpenCode, the check and the automatic runs apply to top-level sessions only, and `auto.pause` skips child sessions.
 
+## Guards and records
+
+**Dangerous commands.** The shell tool of every host refuses the worst commands, with or without configuration: `rm` with recursive and force flags on `/`, `/*`, `~` or `$HOME`; `git push --force` (or `-f`, or a `+` refspec) to `main` or `master` (`--force-with-lease` is allowed); `mkfs`; and `dd` with `of=/dev/...` (except `/dev/null`). The command is split at unquoted `;`, `&&`, `||`, `|` and newlines, and each part is judged on its own. Text inside quotes is an argument, so `git commit -m "rm -rf /"` passes. `bash -c`, command substitution and variable assembly are not inspected. This is a guard against slips, not a security boundary.
+
+**Write scope.** If `.cw/scope.txt` exists and has entries, the file-writing tools may only write paths under those entries. One repository-relative prefix per line; blank lines and lines starting with `#` are ignored; `src` covers `src` and `src/a.ts` but not `srcx`. Paths under `.cw/` are exempt. The file itself is always protected. The scope applies without a `project.toml`, follows symbolic links, and covers only the write tools, not the shell.
+
+**Step cap for roles.** A role stops after 30 steps (`research` 80, `planner` 1). A step is one model request or tool call, counted the way each host can observe it: `--max-turns` on Claude Code (the flag is missing from `claude --help` but works), completed tool items in the `codex exec --json` output on Codex, `session.step.ended` events on OpenCode. A stopped role returns `已达 <n> 步上限，已终止，拆小输入后重试`, the meter event gets `outcome: "budget"`, and nothing is retried. Tokens are not a limit, because Codex reports them only at the end. The reviewers are also told to read only the files the diff touches and their direct callers.
+
+**Meter events.** `inject` is written when the instructions are injected: `{"host","version","goal","check"}`, at `SessionStart` on Codex and Claude Code, and on the first model call of a top-level session on OpenCode. An evaluation can read it to tell whether injection really happened.
+
+**Chronicle.** If `~/.agents/chronicle/` exists, the end of a turn (not a repair continuation) writes `events/<machine>/<id>.json` and `evidence/<machine>/<id>.json` there, following the steward chronicle layout. The directory is never created. `outcome` is `ok` when the check passed, `failed` when it did not, `cancelled` when it was cancelled, and `unknown` when there was no check; the evidence is the check report, or a `gap` that says why there is none. `project` is read from `projects.yaml` only for plain `/absolute/path: id` lines, and is `null` otherwise. A write failure never affects the turn. Claude Code does not run `Stop` when you press Esc, so a cancelled turn leaves no event there.
+
 ## Sharing `.cw` with pi
 
 A `.cw/project.toml` that is valid for pi is also valid here. `[check]`, `[protect]`, `[timeouts]`, `[auto]`, and `[router]` apply to both tools. Models differ because pi requires `provider/model` names, so pi reads `[models]` from `project.toml` and each host here reads `[models]` from its own file. Do not add host settings to `project.toml`, because pi rejects unknown keys.
@@ -387,7 +409,7 @@ Codex CLI:
 
 - If the hook process crashes before it returns a decision, Codex allows the tool call.
 - `codex exec` skips untrusted hooks without a notice. The TUI asks you to review them at startup.
-- After an update changes a hook, you need to trust that hook again. Version 0.3.0 of the Codex plugin widens the `PreToolUse` matcher to shell tools, so Codex asks you to review the hooks again after you update to it.
+- After an update changes a hook, you need to trust that hook again. Version 0.4.0 of the Codex plugin changes what its hooks do (dangerous commands, scope, inject and chronicle events), so Codex asks you to review the hooks again after you update to it. Claude Code 0.3.0 changes its hooks the same way, so expect the project trust prompt again there.
 - The `planner` role runs without the shell and web search. It was not verified that `apply_patch` is also unavailable to this role, so its restriction also relies on its instructions.
 - `sandbox = "none"` limits a role through its instructions only.
 - The MCP server receives only `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, `CODEX_HOME`, and `OPENAI_API_KEY`. A key that `router.api_key_env` names under any other variable never reaches the server. The router then counts as failed, and the review runs as usual.
@@ -433,6 +455,8 @@ npm ci
 npm run typecheck
 npm test
 ```
+
+Files under `src/core/` named `budget.ts`, `danger.ts`, `scope.ts`, `chronicle-event.ts` and `pending.ts` are identical to the ones in [pi-counterweight](https://github.com/nerdneilsfield/pi-counterweight). Run `npm run check:sync` before a release to compare them byte for byte; it skips with a note when `../pi-counterweight` is missing. `npm test` does not call it.
 
 `npm test` builds the bundles first. Tests put a fake `codex` or `claude` executable first on `PATH` and drive the OpenCode plugin with a fake context object, so they need no model credentials. The bundles in `plugins/codex-counterweight/dist/`, `plugins/claude-counterweight/dist/`, and `plugins/opencode-counterweight/index.js` are committed because plugin installation does not run `npm install`. Run `npm run bundle` before you commit a source change.
 

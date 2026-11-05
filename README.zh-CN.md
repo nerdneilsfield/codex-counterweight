@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-0.3.0-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.4.0-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
 [![License: MIT](https://img.shields.io/github/license/nerdneilsfield/codex-counterweight)](LICENSE)
 [![Tested with Codex CLI 0.166.0](https://img.shields.io/badge/tested%20with-Codex%20CLI%200.166.0-412991)](https://github.com/openai/codex/releases/tag/rust-v0.166.0)
 [![Tested with Claude Code 2.1.318](https://img.shields.io/badge/tested%20with-Claude%20Code%202.1.318-D97757)](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.318)
@@ -31,6 +31,7 @@ codex-counterweight 是 Codex CLI、Claude Code 和 OpenCode 的插件，用来�
 - [配置](#配置)
 - [角色工具](#角色工具)
 - [自动运行](#自动运行)
+- [防护和记录](#防护和记录)
 - [与 pi 共用 `.cw`](#与-pi-共用-cw)
 - [使用限制](#使用限制)
 - [常见问题](#常见问题)
@@ -168,6 +169,9 @@ grep '"event":"check"' .cw/meter.jsonl
 ### 看懂结果
 
 - 配了 `[check]` 后，每轮结束都有一行 `[counterweight]`。看不到这一行，就说明检查没有运行。OpenCode 例外：检查通过时不显示，要看 `.cw/meter.jsonl`。
+- 会话真正开始时（startup 和 clear，不含压缩和 resume），如果没有 `.cw/project.toml` 或没有 `[check]`，Codex 和 Claude Code 会显示一行提示：回合结束时不会跑检查。OpenCode 没有显示通道，只在 `inject` 事件里记 `"check": false`。
+- `.cw/pending.md` 里有条目时，回合结束行末尾附 `待批 N 条`。没有检查结果时单独一行。OpenCode 不显示，因为那要多花一次模型调用。
+- 自动审查的角色没跑完时，会有一行 `[counterweight] 自动审查未完成：<角色> <原因>`。它不改变检查结果，也不让回合续跑。OpenCode 请模型转告一次，这要多花一次模型调用。
 - 报告写着未通过且不再自动重试，说明那次修复没有解决问题。你可以发新请求，也可以自己修。新请求会重新获得一次修复机会。
 - 审查发现是报告，不是裁决。模型要么处理，要么说明为什么不处理，发现也不会改变检查结果。
 - `.cw/meter.jsonl` 记录用量、检查、角色调用和 PAUSE 决定。`.cw/HISTORY.md` 是史官写的项目历史。
@@ -201,10 +205,16 @@ grep '"event":"check"' .cw/meter.jsonl
 | 把 token 用量追加到 `.cw/meter.jsonl` | 模型响应 | 回合结束和会话结束时扫描 transcript | 完成的步骤 |
 | 运行检查，然后运行已开启的自动任务 | 回合结束 | 回合结束 | 会话空闲 |
 
-没有 `.cw/project.toml` 时，插件放行所有写入，只有写 `.cw/goal.md` 除外，回合结束时不做任何事。以下两项对所有启用了插件的仓库都生效，即使没有配置文件：
+没有 `.cw/project.toml` 时，插件放行所有写入，只有写 `.cw/goal.md`、`.cw/scope.txt`（以及范围生效时范围外的写入）除外，仍然拒绝下面的高危 shell 命令，回合结束时不跑检查。以下两项对所有启用了插件的仓库都生效，即使没有配置文件：
 
 - 注入的约束会改变模型的行为。它要求模型用中文直接作答，并避免添加当前需求用不到的抽象。原文在 [`src/roles/prompts.ts`](src/roles/prompts.ts)。
-- 插件会在每个仓库里创建 `.cw/meter.jsonl`。如果不想跟踪这个文件，把 `.cw/` 加入该仓库的 `.gitignore`。
+- 插件会在每个仓库里创建 `.cw/meter.jsonl`。想让本地文件不进 git、又保留共享的经验笔记，在 `.gitignore` 里写：
+
+  ```gitignore
+  /.cw/*
+  !/.cw/PRACTICES.md
+  !/.cw/BUGS.md
+  ```
 
 ### 结束检查
 
@@ -216,7 +226,7 @@ grep '"event":"check"' .cw/meter.jsonl
 
 ### 受保护路径
 
-配置加载成功后，`.cw/project.toml`、`.cw/goal.md`、`.cw/codex.toml`、`.cw/claude.toml` 和 `.cw/opencode.toml` 在所有宿主上总是受保护。`.cw/goal.md` 即使在 `.cw/project.toml` 缺失或非法时也受保护，因为插件不需要配置就会注入它。只要调用中有一个路径受保护、通过符号链接指向受保护路径，或位于仓库之外，插件就拒绝整个调用。解析不出路径的调用也会被拒绝。
+配置加载成功后，`.cw/project.toml`、`.cw/goal.md`、`.cw/scope.txt`、`.cw/codex.toml`、`.cw/claude.toml` 和 `.cw/opencode.toml` 在所有宿主上总是受保护。`.cw/goal.md` 和 `.cw/scope.txt` 即使在 `.cw/project.toml` 缺失或非法时也受保护，因为插件不需要配置就会用到它们。只要调用中有一个路径受保护、通过符号链接指向受保护路径，或位于仓库之外，插件就拒绝整个调用。解析不出路径的调用也会被拒绝。
 
 ### 目标文件
 
@@ -361,6 +371,18 @@ OpenCode 按第一个斜杠切分模型名称，所以斜杠之后的模型 id �
 
 检查的修复轮和审查的修复轮分开计数，所以一个用户回合最多续跑两次。在 OpenCode 上，检查和自动运行只作用于顶层会话，`auto.pause` 跳过子会话。
 
+## 防护和记录
+
+**高危命令。** 所有宿主的 shell 工具都会拒绝最危险的几类命令，有没有配置都一样：`rm` 带递归和强制，目标是 `/`、`/*`、`~` 或 `$HOME`；强制推送（`--force`、`-f` 或带 `+` 的 refspec）到 `main` 或 `master`（`--force-with-lease` 放行）；`mkfs`；`dd` 的 `of=/dev/...`（`/dev/null` 除外）。命令按未加引号的 `;`、`&&`、`||`、`|` 和换行切开，逐段判断。引号里的文本只是参数，所以 `git commit -m "rm -rf /"` 能通过。`bash -c`、命令替换和变量拼接不检查。这只防手滑，不是安全边界。
+
+**写入范围。** `.cw/scope.txt` 存在且有内容时，写文件的工具只能写这些前缀之下的路径。每行一个仓库相对路径前缀，空行和 `#` 开头的行忽略；`src` 管 `src` 和 `src/a.ts`，不管 `srcx`。`.cw/` 下的路径不受限制，文件本身始终受保护。没有 `project.toml` 时范围也生效，会跟随符号链接，只管写文件的工具，不管 shell。
+
+**角色步数上限。** 角色最多 30 步（`research` 80，`planner` 1）。一步是一次模型请求或工具调用，各宿主按自己能观察到的数：Claude Code 用 `--max-turns`（`claude --help` 没列这个参数，但它有效），Codex 数 `codex exec --json` 输出里已完成的工具 item，OpenCode 数 `session.step.ended` 事件。超限的角色返回 `已达 <n> 步上限，已终止，拆小输入后重试`，计量事件记 `outcome: "budget"`，不重试。token 不作为上限，因为 Codex 只在结束时给出。审查角色还被告知只读 diff 涉及的文件和直接调用方。
+
+**计量事件。** 注入发生时写 `inject`：`{"host","version","goal","check"}`。Codex 和 Claude Code 在 `SessionStart` 写，OpenCode 在顶层会话第一次模型调用时写。评测可以读它判断是否真的注入了。
+
+**Chronicle。** `~/.agents/chronicle/` 存在时，回合结束（不是修复续跑）会按 steward 的 chronicle 布局写 `events/<machine>/<id>.json` 和 `evidence/<machine>/<id>.json`。目录不会被创建。`outcome`：检查通过为 `ok`，失败为 `failed`，取消为 `cancelled`，没有检查为 `unknown`；证据是检查报告，或者说明原因的 `gap`。`project` 只从 `projects.yaml` 里 `/绝对路径: id` 形式的行读取，读不到写 `null`。写入失败不影响本轮。Claude Code 按 Esc 不触发 `Stop`，所以那里取消的回合没有事件。
+
 ## 与 pi 共用 `.cw`
 
 对 pi 合法的 `.cw/project.toml` 在这里同样合法。`[check]`、`[protect]`、`[timeouts]`、`[auto]` 和 `[router]` 对两边都生效。模型配置不同：pi 要求 `provider/model` 格式，所以 pi 读 `project.toml` 的 `[models]`，这里的每个宿主读自己文件里的 `[models]`。不要把宿主设置写进 `project.toml`，因为 pi 会拒绝未知字段。
@@ -384,7 +406,7 @@ Codex CLI：
 
 - 如果 hook 进程在返回决定前崩溃，Codex 会放行工具调用。
 - `codex exec` 会直接跳过未信任的 hook，不给提示。TUI 在启动时会要求你查看。
-- 更新改变了 hook 时，需要重新信任该 hook。本插件的 0.3.0 版把 `PreToolUse` 的匹配范围扩大到 shell 工具，所以更新到这个版本后，Codex 会再次要求你查看 hook。
+- 更新改变了 hook 时，需要重新信任该 hook。本插件的 0.4.0 版改变了 hook 的行为（高危命令、写入范围、inject 和 chronicle 事件），所以更新到这个版本后，Codex 会再次要求你查看 hook。Claude Code 的 0.3.0 版同样改变了 hook，那里会再次出现项目信任提示。
 - `planner` 角色运行时关闭了 shell 和联网搜索。`apply_patch` 对该角色是否也不可用尚未验证，所以这项限制还依赖角色提示。
 - `sandbox = "none"` 时，角色只受提示约束。
 - MCP server 只能收到 `HOME`、`LANG`、`LC_ALL`、`LOGNAME`、`PATH`、`SHELL`、`TERM`、`USER`、`CODEX_HOME` 和 `OPENAI_API_KEY`。如果 `router.api_key_env` 指向其他变量，key 传不到 server，闸门按失败处理，审查照常运行。
@@ -430,6 +452,8 @@ npm ci
 npm run typecheck
 npm test
 ```
+
+`src/core/` 下的 `budget.ts`、`danger.ts`、`scope.ts`、`chronicle-event.ts` 和 `pending.ts` 与 [pi-counterweight](https://github.com/nerdneilsfield/pi-counterweight) 里的同名文件逐字节相同。发布前运行 `npm run check:sync` 逐字节比较；`../pi-counterweight` 不存在时会说明并跳过。`npm test` 不调用它。
 
 `npm test` 会先构建产物。测试把假的 `codex` 或 `claude` 可执行文件放在 `PATH` 最前面，并用假的 ctx 对象驱动 OpenCode 插件，不需要模型凭据。`plugins/codex-counterweight/dist/`、`plugins/claude-counterweight/dist/` 和 `plugins/opencode-counterweight/index.js` 下的产物要提交，因为安装插件时不会运行 `npm install`。提交源码改动前先运行 `npm run bundle`。
 

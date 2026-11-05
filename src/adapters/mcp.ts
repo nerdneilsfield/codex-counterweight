@@ -84,7 +84,7 @@ export function serveMcp(host: McpHost): void {
         reply(id, {
           protocolVersion: request.params?.protocolVersion ?? "2025-06-18",
           capabilities: { tools: {}, ...(host.experimental === undefined ? {} : { experimental: host.experimental }) },
-          serverInfo: { name: "counterweight", version: "0.3.0" },
+          serverInfo: { name: "counterweight", version: "0.4.0" },
         });
         return;
       case "ping": reply(id, {}); return;
