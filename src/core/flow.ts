@@ -9,7 +9,7 @@ import type { ProjectConfig } from "./config.js";
 import { recordEvent } from "./meter.js";
 import { isNotFound, realpathOr, resolveWriteTarget } from "./paths.js";
 import { isSourceEdit, pauseReason, plannerMessage } from "./pause.js";
-import { isProtected } from "./protect.js";
+import { GOAL_FILE, isProtected } from "./protect.js";
 import type { Claim } from "./turnstate.js";
 import type { RoleRunner } from "../roles/run.js";
 import { chronicle, reviewMessage, runAndMeter, type RoleContext } from "../roles/tools.js";
@@ -71,6 +71,31 @@ function toRepoRelative(repoRoot: string, cwd: string, value: string): string | 
   return relative.split(path.sep).join("/");
 }
 
+/**
+ * 没有可用配置时的最小保护：`.cw/goal.md` 不用配置也会被注入，所以仍然拒绝写它，包括经符号链接指向它的路径。
+ * 其他路径一律放行，`.cw/project.toml` 要留给 setup 创建。
+ */
+export async function checkGoalPaths(root: string, cwd: string, paths: string[]): Promise<string | null> {
+  try {
+    const realCwd = await realpathOr(cwd);
+    for (const raw of paths) {
+      const lexical = toRepoRelative(root, realCwd, raw);
+      if (lexical === null) continue;
+      if (lexical === GOAL_FILE) return PROTECTED_REASON(GOAL_FILE);
+      let resolved: string;
+      try {
+        resolved = await resolveWriteTarget(root, lexical);
+      } catch {
+        continue;
+      }
+      if (resolved === GOAL_FILE) return `${PROTECTED_REASON(GOAL_FILE)}（路径 ${raw} 指向该受保护文件）`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 export interface EndCheckResult {
   /** 非空表示要续跑，内容交给模型。 */
   continueWith: string | null;
@@ -95,6 +120,8 @@ export async function endCheck(params: {
   prompt: () => Promise<string>;
   /** 本回合的非只读动作，只交给 over_review。 */
   actions: () => Promise<ActionRecord[]>;
+  /** 本回合开始时的工作树快照；没取到为 null。 */
+  base: () => Promise<string | null>;
 }): Promise<EndCheckResult> {
   const { root, project, session, signal } = params;
   const texts: string[] = [];
@@ -149,7 +176,8 @@ export async function endCheck(params: {
 
 /**
  * 收尾时的自动审查与汇报，只在 `[auto]` 打开时有动作。review 与 over_review 并行，只报告，不决定检查是否通过。
- * 有发现且本回合还没续跑过：发现作为 `findings` 交回模型续跑一次；额度用完只显示。任何失败都只是不产生文字。
+ * 有发现且本回合还没续跑过：发现作为 `findings` 交回模型续跑一次；额度用完只显示。
+ * 改动按回合基线算，续跑后的那次收尾看到整个回合。不续跑的收尾才交给史官，发现照样显示。任何失败都只是不产生文字。
  */
 async function runAuto(
   params: Parameters<typeof endCheck>[0], checkLine: string | null,
@@ -158,7 +186,8 @@ async function runAuto(
   const { root, project, session, signal } = params;
   try {
     if (!project.auto.review && !project.auto.chronicle) return none;
-    const diff = await workingDiff(root);
+    const base = await params.base();
+    const diff = await workingDiff(root, base);
     const changed = diff !== null && diff.trim() !== "";
     // 跑了命令但没改文件时 diff 是空的。命令只交给 over_review，review 仍按 diff 判断对错。
     const actions = renderActions(await params.actions());
@@ -170,6 +199,7 @@ async function runAuto(
     if (!plan.review && !plan.overReview && !plan.chronicle) return none;
     const ctx: RoleContext = { repo: root, session, project, runner: params.runner };
     const request = await params.prompt();
+    let shown: string | null = null;
     if (plan.review || plan.overReview) {
       const empty = Promise.resolve({ answer: null });
       const [correct, over] = await Promise.all([
@@ -190,14 +220,20 @@ async function runAuto(
         if (changed && first) {
           return { text: null, findings: `[counterweight] 自动审查有发现，处理或说明为什么不处理：\n\n${findings.join("\n\n")}` };
         }
-        return { text: `[counterweight] 自动审查有发现，不再续跑：\n\n${findings.join("\n\n")}`, findings: null };
+        shown = `[counterweight] 自动审查有发现，不再续跑：\n\n${findings.join("\n\n")}`;
       }
     }
+    // 走到这里就不再续跑：发现只显示，这一轮的汇报照样给史官。
     if (plan.chronicle) {
-      const report = chronicleReport(request, changedFiles(diff!), checkLine);
-      await chronicle(ctx, project.models.historian!, report, signal);
+      // 史官失败不能吞掉已经拿到的审查发现。
+      try {
+        const report = chronicleReport(request, await changedFiles(root, base), checkLine);
+        await chronicle(ctx, project.models.historian!, report, signal);
+      } catch {
+        // Best-effort.
+      }
     }
-    return none;
+    return { text: shown, findings: null };
   } catch {
     return none;
   }

@@ -2,9 +2,9 @@
  * OpenCode v2 插件：进程内运行，没有一次性 hook 进程，回合状态放在内存里。
  * OpenCode 没有给插件向用户显示文字的通道，所以检查通过时什么也不显示，只写 `.cw/meter.jsonl`。
  */
-import type { ActionRecord } from "../../core/auto.js";
+import { snapshotTree, type ActionRecord } from "../../core/auto.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
-import { checkPaths, endCheck, pausePlan } from "../../core/flow.js";
+import { checkGoalPaths, checkPaths, endCheck, pausePlan } from "../../core/flow.js";
 import { readGoal } from "../../core/goal.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
@@ -32,7 +32,7 @@ export interface Ctx {
   event: { subscribe(options?: { types?: string[]; signal?: AbortSignal }): AsyncIterable<any> };
 }
 
-interface Turn { repair: boolean; findings: boolean; pause: boolean; relayed: boolean; prompt: string; actions: ActionRecord[] }
+interface Turn { repair: boolean; findings: boolean; pause: boolean; relayed: boolean; prompt: string; actions: ActionRecord[]; base: string | null }
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -53,7 +53,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
   const turnOf = (sessionID: string): Turn => {
     let turn = turns.get(sessionID);
     if (turn === undefined) {
-      turn = { repair: false, findings: false, pause: false, relayed: false, prompt: "", actions: [] };
+      turn = { repair: false, findings: false, pause: false, relayed: false, prompt: "", actions: [], base: null };
       turns.set(sessionID, turn);
     }
     return turn;
@@ -103,9 +103,17 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
     });
   });
 
-  await ctx.session.hook("prompt", (event) => {
+  await ctx.session.hook("prompt", async (event) => {
     if (roleSessions.has(event.sessionID)) return;
-    turns.set(event.sessionID, { repair: false, findings: false, pause: false, relayed: false, prompt: event.prompt?.text ?? "", actions: [] });
+    const turn: Turn = { repair: false, findings: false, pause: false, relayed: false, prompt: event.prompt?.text ?? "", actions: [], base: null };
+    turns.set(event.sessionID, turn);
+    // 回合基线：只有审查或汇报打开时才用得上。取不到就留 null，收尾时退回 HEAD。
+    try {
+      const project = await load();
+      if (project !== null && (project.auto.review || project.auto.chronicle)) turn.base = await snapshotTree(root);
+    } catch {
+      // Without a baseline the review falls back to HEAD.
+    }
   });
 
   await ctx.tool.hook("execute.before", async (event) => {
@@ -118,6 +126,14 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
       return;
     }
     if (event.tool !== "write" && event.tool !== "edit" && event.tool !== "patch") return;
+    const input = (event.input ?? {}) as Record<string, unknown>;
+    const target = input.path;
+    const paths = event.tool === "patch"
+      ? (typeof input.patchText === "string" ? patchPaths(input.patchText) : [])
+      : (typeof target === "string" && target !== "" ? [target] : []);
+    // goal.md 不用配置也会被注入，所以配置缺失或非法时也不许改它。
+    const goal = await checkGoalPaths(root, directory, paths);
+    if (goal !== null) throw new Error(goal);
     let project: ProjectConfig | null;
     try {
       project = await load();
@@ -125,11 +141,6 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
       return;
     }
     if (project === null) return;
-    const input = (event.input ?? {}) as Record<string, unknown>;
-    const target = input.path;
-    const paths = event.tool === "patch"
-      ? (typeof input.patchText === "string" ? patchPaths(input.patchText) : [])
-      : (typeof target === "string" && target !== "" ? [target] : []);
     const refusal = await checkPaths(root, directory, project, paths);
     if (refusal !== null) throw new Error(refusal);
     if (await isChild(event.sessionID)) return;
@@ -162,7 +173,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
         result = await endCheck({
           root, project, session: sessionID, runner: makeRunner(ctx.session, sessionID, roleSessions),
           signal: tracked.signal, claim: claimFor(sessionID), prompt: async () => turn.prompt,
-          actions: async () => turn.actions,
+          actions: async () => turn.actions, base: async () => turn.base,
         });
       } catch (error) {
         result = { continueWith: null, report: `[counterweight] 配置非法，未运行检查：${message(error)}`, attention: true };

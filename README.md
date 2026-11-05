@@ -142,12 +142,14 @@ Automatic runs, if enabled
     |-- Findings and file changes, first time -> The model gets the findings
     |                                            and continues.
     |-- Findings, otherwise                   -> The findings are shown.
-    |-- No findings, files changed            -> The historian updates the history.
+    |-- Files changed, and the turn does
+    |   not continue                          -> The historian updates the history,
+    |                                            also when findings were shown.
     v
 The turn ends and you see the result
 ```
 
-One user turn continues at most twice: once for the check and once for review findings. After that, the plugin reports what it found and the decision is yours.
+One user turn continues at most twice: once for the check and once for review findings. After that, the plugin reports what it found and the decision is yours. Changes are counted from the start of the turn, so files you left uncommitted before it do not trigger a review, and a commit made during the turn does not hide the turn's changes. The review that follows a continuation sees the whole turn.
 
 ### Add features in stages
 
@@ -196,13 +198,13 @@ The plugin acts on the following events of each host.
 | Action | Codex CLI | Claude Code | OpenCode |
 | --- | --- | --- | --- |
 | Injects the working instructions | Session start, `/clear`, compaction | Session start, `/clear`, compaction | Every model call of a top-level session |
-| Stores the prompt for automatic reviews | User prompt | User prompt | Prompt |
+| Stores the prompt, and takes the snapshot that marks the start of the turn when `auto.review` or `auto.chronicle` is on | User prompt | User prompt | Prompt |
 | Rejects writes to protected paths, and optionally pauses the first source edit | `apply_patch` | `Edit`, `Write`, `NotebookEdit` | `write`, `edit`, `patch` |
 | Records the turn's shell commands and file writes for `auto.review` | `Bash`, `exec_command`, `shell_command`, `apply_patch` | `Bash`, `Edit`, `Write`, `NotebookEdit` | `shell`, `write`, `edit`, `patch` |
 | Appends token usage to `.cw/meter.jsonl` | Model response | Transcript scan at turn end and session end | Finished step |
 | Runs the check, then any automatic runs | Turn end | Turn end | Session idle |
 
-Without `.cw/project.toml`, the plugin allows every write and does nothing at the end of a turn. Two actions still apply to every repository where the plugin is enabled:
+Without `.cw/project.toml`, the plugin allows every write except a write to `.cw/goal.md`, and does nothing at the end of a turn. Two actions still apply to every repository where the plugin is enabled:
 
 - The injected instructions change how the model behaves. They ask for direct answers in Chinese and tell the model to avoid abstractions that no current requirement needs. The text is in [`src/roles/prompts.ts`](src/roles/prompts.ts).
 - The plugin creates `.cw/meter.jsonl` in each repository. Add `.cw/` to the repository's `.gitignore` if you do not want to track this file.
@@ -217,11 +219,11 @@ A check that exceeds its timeout counts as a failure. The plugin sends `SIGTERM`
 
 ### Protected paths
 
-`.cw/project.toml`, `.cw/goal.md`, `.cw/codex.toml`, `.cw/claude.toml`, and `.cw/opencode.toml` are always protected once configuration loads, on every host. The plugin rejects the whole call if any path in it is protected, resolves through a symbolic link to a protected path, or is outside the repository. A call whose paths cannot be parsed is also rejected.
+`.cw/project.toml`, `.cw/goal.md`, `.cw/codex.toml`, `.cw/claude.toml`, and `.cw/opencode.toml` are always protected once configuration loads, on every host. `.cw/goal.md` is protected even when `.cw/project.toml` is missing or invalid, because the plugin injects it without any configuration. The plugin rejects the whole call if any path in it is protected, resolves through a symbolic link to a protected path, or is outside the repository. A call whose paths cannot be parsed is also rejected.
 
 ### Goal file
 
-`.cw/goal.md` holds a goal in your own words. When the file exists and is not blank, the plugin appends it to the injected instructions with a request to stay inside the goal and not widen it. Text beyond 4,000 characters is cut off, and the cut is marked. The file is always protected, so the model cannot edit the goal it is held to. Without the file, nothing is added. Only top-level sessions receive the goal. Role subprocesses and OpenCode child sessions do not.
+`.cw/goal.md` holds a goal in your own words. When the file exists and is not blank, the plugin appends it to the injected instructions with a request to stay inside the goal and not widen it. Text beyond 4,000 characters is cut off, and the cut is marked. The file is always protected, with or without a configuration, so the model cannot edit the goal it is held to. Without the file, nothing is added. Only top-level sessions receive the goal. Role subprocesses and OpenCode child sessions do not.
 
 How soon an edit takes effect depends on the host:
 
@@ -350,8 +352,8 @@ By default, the model decides whether to call the role tools. The `[auto]` keys 
 
 | Key | Needs | Behavior |
 | --- | --- | --- |
-| `auto.review` | `review`, `over_review` | At the end of a turn with changes, runs both reviewers in parallel on the diff against `HEAD`. `over_review` also receives the turn's commands (see below). Findings go back to the model once per turn. Later findings are only shown. Diffs longer than 80,000 characters are truncated. |
-| `auto.chronicle` | `historian` | At the end of a turn with changes and no findings, sends a summary of the turn to the historian. |
+| `auto.review` | `review`, `over_review` | At the end of a turn with changes, runs both reviewers in parallel on the diff from the start of the turn to now. The diff includes the content of new files and leaves out `.cw/`. `over_review` also receives the turn's commands (see below). Findings go back to the model once per turn. Later findings are only shown. Diffs longer than 80,000 characters are truncated. |
+| `auto.chronicle` | `historian` | At the end of a turn with changes, sends a summary of the turn to the historian, unless the plugin is about to send review findings back to the model. In that case the historian runs at the end of the continued turn. Findings that are only shown do not stop it. |
 | `auto.pause` | `planner` | Rejects the first source edit of each turn, once, and returns a plan from the `planner` role. Edits under `.cw/` and `tmp/` do not count. |
 
 `over_review` receives the shell commands and file writes of the top-level agent in the current turn, listed after the diff. They are the calls, not their results. A diff does not show a command that changed no file, such as a rerun or a wider sweep. The list holds at most 40 entries. When it is longer, file writes are dropped first, and a command longer than 2,000 characters is left out. A call that path protection or `auto.pause` rejected is not listed. Commands run by sub-agents are not listed. `review` still judges the diff only.
@@ -379,6 +381,7 @@ Limits on every host:
 - `[router]` applies to direct `cw_review` and `cw_over_review` calls. `auto.review` always runs the reviewers.
 - The role runner of each host depends on that host's output or API format. An update of the host can change it.
 - The plugin does not record the commands and file writes of sub-agents, so `over_review` does not see them.
+- If the snapshot at the start of the turn fails, the plugin compares against `HEAD` instead. Files that were already uncommitted then count as changes.
 
 Codex CLI:
 
@@ -421,7 +424,7 @@ OpenCode:
 | A role cannot read files on Codex | The Codex sandbox cannot start on this machine | Check `kernel.apparmor_restrict_unprivileged_userns`, or set `roles.sandbox = "none"`. |
 | A role reports `未正常结束` | The role's turn did not complete | Read the reason in the message and call the tool again. |
 | A role reports a timeout | The input took longer than `timeout_s` | Retry with the value in the message. At 1800 seconds, split the input. |
-| `[auto]` does nothing | The key has no model, or the work tree has no changes | Check the notice at session start, and confirm that the turn changed files. A turn without changes still runs `over_review` if it ran commands. |
+| `[auto]` does nothing | The key has no model, or the turn changed no files | Check the notice at session start, and confirm that the turn changed files. A turn without changes still runs `over_review` if it ran commands. |
 
 ## Development
 

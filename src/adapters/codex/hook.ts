@@ -4,14 +4,15 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { snapshotTree } from "../../core/auto.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
-import { checkPaths, endCheck, pausePlan } from "../../core/flow.js";
+import { checkGoalPaths, checkPaths, endCheck, pausePlan } from "../../core/flow.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
 import { renderTranscript } from "../../core/pause.js";
 import { goalUpdate, readGoal, rememberGoal } from "../../core/goal.js";
-import { claim, endSession, loadActions, loadPrompt, recordAction, savePrompt } from "../../core/turnstate.js";
+import { claim, endSession, loadActions, loadBase, loadPrompt, recordAction, saveBase, savePrompt } from "../../core/turnstate.js";
 import { sessionSection, withGoal } from "../../roles/prompts.js";
 import { patchPaths } from "./patch.js";
 import { runRole } from "./runner.js";
@@ -61,7 +62,18 @@ async function main(): Promise<void> {
 
 async function userPrompt(root: string, input: HookInput): Promise<Output> {
   const session = input.session_id ?? "";
-  await savePrompt(session, input.turn_id ?? "", input.prompt ?? "").catch(() => {});
+  const turn = input.turn_id ?? "";
+  await savePrompt(session, turn, input.prompt ?? "").catch(() => {});
+  // 回合基线：只有审查或汇报打开时才用得上。取不到就不存，收尾时退回 HEAD。
+  try {
+    const project = await loadProjectConfig(root, "codex.toml");
+    if (project !== null && (project.auto.review || project.auto.chronicle)) {
+      const base = await snapshotTree(root);
+      if (base !== null) await saveBase(session, turn, base);
+    }
+  } catch {
+    // Without a baseline the review falls back to HEAD.
+  }
   const additionalContext = await goalUpdate(root, session).catch(() => null);
   return additionalContext === null ? null : { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } };
 }
@@ -111,6 +123,12 @@ const deny = (reason: string): Output => ({
 });
 
 async function preToolUse(root: string, cwd: string, input: HookInput): Promise<Output> {
+  const command = input.tool_input?.command;
+  // goal.md 不用配置也会被注入，所以配置缺失或非法时也不许改它。
+  if (input.tool_name === undefined || !SHELL_TOOLS.has(input.tool_name)) {
+    const goal = await checkGoalPaths(root, cwd, typeof command === "string" ? patchPaths(command) : []);
+    if (goal !== null) return deny(goal);
+  }
   let project: ProjectConfig | null;
   try {
     project = await loadProjectConfig(root, "codex.toml");
@@ -118,7 +136,6 @@ async function preToolUse(root: string, cwd: string, input: HookInput): Promise<
     return null;
   }
   if (project === null) return null;
-  const command = input.tool_input?.command;
   const session = input.session_id ?? "";
   const turn = input.turn_id ?? "";
   // 根线程的 shell 命令只记录，不过保护和 PAUSE。
@@ -160,6 +177,7 @@ async function stop(root: string, input: HookInput): Promise<Output> {
     claim: (name) => claim(session, turn, name),
     prompt: () => loadPrompt(session, turn),
     actions: () => loadActions(session, turn),
+    base: () => loadBase(session, turn),
   });
   if (result.continueWith !== null) {
     return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? undefined };

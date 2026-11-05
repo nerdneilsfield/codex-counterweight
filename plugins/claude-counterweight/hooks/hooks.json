@@ -18,7 +18,7 @@
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/hook.cjs\"",
-            "timeout": 10
+            "timeout": 30
           }
         ]
       }

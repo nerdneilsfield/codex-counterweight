@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -193,7 +193,10 @@ describe("end of turn", () => {
     it("keeps the repair and findings allowances separate and gives the reviewer the user's request", async () => {
       await project('version = 1\n[check]\ncmd = ["sh", "-c", "echo boom; exit 3"]\n[auto]\nreview = true\n');
       const fake = await start({ answers });
+      // The baseline is taken at the prompt, so the turn's edit comes after it.
+      await writeFile(path.join(repo, "a.txt"), "1\n");
       await prompt(fake, "把 a 改成 2");
+      await writeFile(path.join(repo, "a.txt"), "2\n");
       await idle(fake);
       await idle(fake);
       await idle(fake);
@@ -280,6 +283,31 @@ describe("commands and goal", () => {
     const child: any[] = [];
     await fake.fire("context", { sessionID: "sub", model: model("prov", "m"), system: child });
     expect(child).toEqual([]);
+  });
+});
+
+describe("goal without a usable config", () => {
+  const before = (fake: Awaited<ReturnType<typeof start>>, file: string) =>
+    fake.fire("execute.before", { tool: "edit", sessionID: "root", input: { path: file } });
+  beforeEach(() => mkdir(path.join(repo, ".cw"), { recursive: true }));
+
+  it("refuses goal.md with no config, and still lets setup create project.toml", async () => {
+    const fake = await start();
+    await expect(before(fake, ".cw/goal.md")).rejects.toThrow("受保护路径");
+    await expect(before(fake, ".cw/project.toml")).resolves.toBeUndefined();
+  });
+
+  it("refuses goal.md with an invalid config", async () => {
+    await project("version = 99\n");
+    const fake = await start();
+    await expect(before(fake, ".cw/goal.md")).rejects.toThrow("受保护路径");
+  });
+
+  it("refuses goal.md through a symlink, with no config", async () => {
+    await writeFile(path.join(repo, ".cw/goal.md"), "g");
+    await symlink(".cw/goal.md", path.join(repo, "alias.md"));
+    const fake = await start();
+    await expect(before(fake, "alias.md")).rejects.toThrow("受保护路径");
   });
 });
 

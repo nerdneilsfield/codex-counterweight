@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -163,7 +163,10 @@ describe("auto review", () => {
   it("continues once on findings and passes the user's request to the reviewer", async () => {
     await writeConfig('version = 1\n[auto]\nreview = true\n');
     await installFakeCodex(sandbox, findings);
+    // The baseline is taken at the prompt, so the turn's edit comes after it.
+    await writeFile(path.join(repo, "a.txt"), "1\n");
     await runHook({ hook_event_name: "UserPromptSubmit", prompt: "把 a 改成 2" });
+    await writeFile(path.join(repo, "a.txt"), "2\n");
     const first = await runHook({ hook_event_name: "Stop" });
     expect(first.out.decision).toBe("block");
     expect(first.out.reason).toContain("WRONG `a.txt:1`");
@@ -172,6 +175,22 @@ describe("auto review", () => {
     expect(second.out.decision).toBeUndefined();
     expect(second.out.systemMessage).toContain("不再续跑");
   });
+
+  it("chronicles at the final settle even though findings are shown", async () => {
+    await writeConfig('version = 1\n[auto]\nreview = true\nchronicle = true\n');
+    await writeConfigFile(repo, "codex.toml", '[models]\nreview = "rv"\nover_review = "ov"\nhistorian = "hs"\n');
+    await installFakeCodex(sandbox, { byModel: { ...findings.byModel, hs: { answer: "# 历史\n- 记了一笔" } } });
+    await writeFile(path.join(repo, "a.txt"), "1\n");
+    await runHook({ hook_event_name: "UserPromptSubmit", prompt: "把 a 改成 2" });
+    await writeFile(path.join(repo, "a.txt"), "2\n");
+    const history = path.join(repo, ".cw", "HISTORY.md");
+    expect((await runHook({ hook_event_name: "Stop" })).out.decision).toBe("block");
+    await expect(readFile(history, "utf8")).rejects.toThrow();
+    const second = await runHook({ hook_event_name: "Stop" });
+    expect(second.out.systemMessage).toContain("不再续跑");
+    expect(await readFile(history, "utf8")).toBe("# 历史\n- 记了一笔\n");
+    expect((await fakeCalls(sandbox)).filter((call) => call.model === "hs")[0]!.stdin).toContain("a.txt");
+  }, 30_000);
 
   it("does not continue when the reviewers find nothing", async () => {
     await writeConfig('version = 1\n[auto]\nreview = true\n');
@@ -306,6 +325,27 @@ describe("goal", () => {
     await writeFile(goalFile(), "目标");
     await rm(path.join(sandbox.data, "sessions"), { recursive: true, force: true });
     expect((await prompt()).out.hookSpecificOutput.additionalContext).toContain("目标");
+  });
+});
+
+describe("goal without a usable config", () => {
+  const target = (file: string) => patch(`*** Update File: ${file}`, "@@");
+  beforeEach(() => mkdir(path.join(repo, ".cw"), { recursive: true }));
+
+  it("refuses goal.md with no config, and still lets setup create project.toml", async () => {
+    expect(denied((await preTool(target(".cw/goal.md"))).out)).toBe(true);
+    expect((await preTool(target(".cw/project.toml"))).stdout).toBe("");
+  });
+
+  it("refuses goal.md with an invalid config", async () => {
+    await writeConfig("version = 99\n");
+    expect(denied((await preTool(target(".cw/goal.md"))).out)).toBe(true);
+  });
+
+  it("refuses goal.md through a symlink, with no config", async () => {
+    await writeFile(path.join(repo, ".cw/goal.md"), "g");
+    await symlink(".cw/goal.md", path.join(repo, "alias.md"));
+    expect(denied((await preTool(target("alias.md"))).out)).toBe(true);
   });
 });
 

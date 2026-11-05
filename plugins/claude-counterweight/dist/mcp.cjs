@@ -8460,14 +8460,15 @@ async function repoToplevel(dir) {
   if (result.code !== 0) return null;
   return result.stdout.trim();
 }
-function git(repo, args) {
+function git(repo, args, env = {}) {
   return new Promise((resolve, reject) => {
     const child = (0, import_node_child_process.spawn)("git", args, {
       cwd: repo,
       env: {
         PATH: process.env.PATH,
         HOME: process.env.HOME,
-        GIT_CONFIG_COUNT: "0"
+        GIT_CONFIG_COUNT: "0",
+        ...env
       }
     });
     let stdout = "";

@@ -48,6 +48,26 @@ export async function loadPrompt(session: string, turn: string): Promise<string>
   }
 }
 
+/** 回合开始时的工作树快照（树对象 id）。 */
+export async function saveBase(session: string, turn: string, base: string): Promise<void> {
+  const dir = sessionDir(session);
+  if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, `${turn}.base`), base);
+}
+
+/** 读不到时为 null，调用方退回 HEAD。 */
+export async function loadBase(session: string, turn: string): Promise<string | null> {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return null;
+    const base = (await readFile(path.join(dir, `${turn}.base`), "utf8")).trim();
+    return base === "" ? null : base;
+  } catch {
+    return null;
+  }
+}
+
 /** 已记入计量的 transcript 消息 id；没有可用的数据目录时返回 null，调用方应当不记，免得重复。 */
 export async function loadSeen(session: string): Promise<Set<string> | null> {
   const dir = sessionDir(session);

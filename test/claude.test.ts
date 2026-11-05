@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -95,7 +95,10 @@ describe("auto review", () => {
   it("keeps the repair and findings allowances separate, and gives the reviewer the user's request", async () => {
     await project('version = 1\n[check]\ncmd = ["sh", "-c", "echo boom; exit 3"]\n[auto]\nreview = true\n');
     await installFakeClaude(sandbox, findings);
+    // The baseline is taken at the prompt, so the turn's edit comes after it.
+    await writeFile(path.join(repo, "a.txt"), "1\n");
     await hook({ hook_event_name: "UserPromptSubmit", prompt: "把 a 改成 2" });
+    await writeFile(path.join(repo, "a.txt"), "2\n");
     const stops = [];
     for (let i = 0; i < 3; i += 1) stops.push((await hook({ hook_event_name: "Stop" })).out);
     expect(stops.map((out) => out.decision)).toEqual(["block", "block", undefined]);
@@ -156,6 +159,26 @@ describe("commands and goal", () => {
     await rm(path.join(repo, ".cw/goal.md"));
     expect((await hook({ hook_event_name: "UserPromptSubmit", prompt: "c" })).out.hookSpecificOutput.additionalContext)
       .toBe("The user removed .cw/goal.md. The earlier goal no longer applies.");
+  });
+});
+
+describe("goal without a usable config", () => {
+  beforeEach(() => mkdir(path.join(repo, ".cw"), { recursive: true }));
+
+  it("refuses goal.md with no config, and still lets setup create project.toml", async () => {
+    expect(denied((await edit(".cw/goal.md")).out)).toBe(true);
+    expect((await edit(".cw/project.toml")).stdout).toBe("");
+  });
+
+  it("refuses goal.md with an invalid config", async () => {
+    await project("version = 99\n");
+    expect(denied((await edit(".cw/goal.md")).out)).toBe(true);
+  });
+
+  it("refuses goal.md through a symlink, with no config", async () => {
+    await writeFile(path.join(repo, ".cw/goal.md"), "g");
+    await symlink(".cw/goal.md", path.join(repo, "alias.md"));
+    expect(denied((await edit("alias.md")).out)).toBe(true);
   });
 });
 

@@ -4,9 +4,126 @@ var __export = (target, all) => {
     __defProp(target, name, { get: all[name], enumerable: true });
 };
 
+// src/core/auto.ts
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+// src/core/gitstate.ts
+import { spawn } from "node:child_process";
+async function repoToplevel(dir) {
+  const result = await git(dir, ["rev-parse", "--show-toplevel"]);
+  if (result.code !== 0) return null;
+  return result.stdout.trim();
+}
+function git(repo, args, env = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", args, {
+      cwd: repo,
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        GIT_CONFIG_COUNT: "0",
+        ...env
+      }
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  });
+}
+
+// src/core/auto.ts
+var DIFF_CAP = 8e4;
+var ACTION_CAP = 40;
+var ACTION_DETAIL_CAP = 2e3;
+function renderActions(actions) {
+  if (actions.length === 0) return "";
+  const shown = [];
+  let omitted = 0;
+  for (const action of actions) {
+    const isWrite = action.tool !== "bash" && action.tool !== "powershell";
+    if (isWrite && actions.length - omitted > ACTION_CAP) {
+      omitted += 1;
+      continue;
+    }
+    if (shown.length >= ACTION_CAP || action.detail.length > ACTION_DETAIL_CAP) {
+      omitted += 1;
+      continue;
+    }
+    shown.push(`${shown.length + 1}. ${action.tool} ${action.detail}`);
+  }
+  const rest = omitted > 0 ? `
+\uFF08\u53E6\u6709 ${omitted} \u6761\u672A\u5217\u51FA\uFF09` : "";
+  return `
+\u672C\u56DE\u5408\u7684\u5DE5\u5177\u8C03\u7528\uFF08\u4E0D\u662F\u6267\u884C\u7ED3\u679C\uFF0C\u5171 ${actions.length} \u6761\uFF09\uFF1A
+${shown.join("\n")}${rest}
+`;
+}
+async function snapshotTree(repo) {
+  let dir = null;
+  try {
+    dir = await mkdtemp(path.join(tmpdir(), "cw-index-"));
+    const env = { GIT_INDEX_FILE: path.join(dir, "index") };
+    await git(repo, ["read-tree", "HEAD"], env);
+    if ((await git(repo, ["add", "-A"], env)).code !== 0) return null;
+    const tree = await git(repo, ["write-tree"], env);
+    return tree.code === 0 ? tree.stdout.trim() : null;
+  } catch {
+    return null;
+  } finally {
+    if (dir !== null) await rm(dir, { recursive: true, force: true }).catch(() => {
+    });
+  }
+}
+var diffRange = (base, end) => [base ?? "HEAD", ...end === null ? [] : [end]];
+async function gitOut(repo, args) {
+  try {
+    const result = await git(repo, args);
+    return result.code === 0 ? result.stdout : null;
+  } catch {
+    return null;
+  }
+}
+async function workingDiff(repo, base) {
+  const end = await snapshotTree(repo);
+  const body = await gitOut(repo, ["diff", "--no-ext-diff", "--no-color", ...diffRange(base, end), "--", ".", ":!.cw"]);
+  if (body === null) return null;
+  if (body.trim() === "") return "";
+  return body.length > DIFF_CAP ? `${body.slice(0, DIFF_CAP)}
+# \u2026\uFF08diff \u8D85\u8FC7 ${DIFF_CAP} \u5B57\u7B26\uFF0C\u5DF2\u622A\u65AD\uFF09
+` : body;
+}
+function chronicleReport(request, files, checkLine) {
+  const list = files.length === 0 ? "\uFF08\u65E0\uFF09" : files.slice(0, 40).join("\n");
+  return `\u4E00\u8F6E\u5DE5\u4F5C\u7ED3\u675F\u3002
+
+\u7528\u6237\u8BF7\u6C42\uFF1A
+${request.trim() === "" ? "\uFF08\u672A\u53D6\u5230\uFF09" : request.slice(0, 2e3)}
+
+\u6539\u52A8\u7684\u6587\u4EF6\uFF1A
+${list}
+${checkLine === null ? "" : `
+\u7ED3\u675F\u68C0\u67E5\uFF1A${checkLine}
+`}
+\u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toISOString()}\u3002\u63D0\u4EA4\u4FE1\u606F\u4E0E\u65E5\u671F\u8BF7\u4EE5\u4ED3\u5E93\u4E3A\u51C6\uFF0C\u4E0D\u8981\u7F16\u9020\u3002`;
+}
+async function changedFiles(repo, base) {
+  const end = await snapshotTree(repo);
+  const out = await gitOut(repo, ["-c", "core.quotePath=false", "diff", "--name-only", "-z", ...diffRange(base, end), "--", ".", ":!.cw"]);
+  return out === null ? [] : out.split("\0").filter((name) => name !== "");
+}
+
 // src/core/config.ts
 import { readFile } from "node:fs/promises";
-import path2 from "node:path";
+import path3 from "node:path";
 
 // node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string2, ptr) {
@@ -768,9 +885,9 @@ var HAS_WELLFORMED = !!"".isWellFormed;
 
 // src/core/paths.ts
 import { lstat, realpath } from "node:fs/promises";
-import path from "node:path";
+import path2 from "node:path";
 function relativeParts(value) {
-  if (value === "" || path.isAbsolute(value) || path.win32.isAbsolute(value)) {
+  if (value === "" || path2.isAbsolute(value) || path2.win32.isAbsolute(value)) {
     throw new Error(`path: must be repo-relative ${value}`);
   }
   const parts = value.split("/");
@@ -780,12 +897,12 @@ function relativeParts(value) {
   return parts;
 }
 function pathInside(root, candidate) {
-  const relative = path.relative(root, candidate);
-  return relative === "" || !relative.startsWith("..") && !path.isAbsolute(relative);
+  const relative = path2.relative(root, candidate);
+  return relative === "" || !relative.startsWith("..") && !path2.isAbsolute(relative);
 }
 async function resolveWriteTarget(root, relative) {
   const parts = relativeParts(relative);
-  const absolute = path.join(root, ...parts);
+  const absolute = path2.join(root, ...parts);
   let leaf;
   try {
     leaf = await lstat(absolute);
@@ -805,7 +922,7 @@ async function resolveWriteTarget(root, relative) {
     return await containedRelative(root, absolute, relative);
   }
   for (let length = parts.length - 1; length >= 1; length -= 1) {
-    const ancestor = path.join(root, ...parts.slice(0, length));
+    const ancestor = path2.join(root, ...parts.slice(0, length));
     let stat;
     try {
       stat = await lstat(ancestor);
@@ -825,8 +942,8 @@ async function resolveWriteTarget(root, relative) {
 async function containedRelative(root, candidate, label) {
   const target = await realpath(candidate);
   if (!pathInside(root, target)) throw new Error(`path: symlink escapes repository ${label}`);
-  const relative = path.relative(root, target);
-  return relative === "" ? "" : relative.split(path.sep).join("/");
+  const relative = path2.relative(root, target);
+  return relative === "" ? "" : relative.split(path2.sep).join("/");
 }
 async function realpathOr(value) {
   try {
@@ -7885,23 +8002,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path10, value) {
-  return { type: "update", path: path10, value };
+function CreateUpdate(path11, value) {
+  return { type: "update", path: path11, value };
 }
-function CreateInsert(path10, value) {
-  return { type: "insert", path: path10, value };
+function CreateInsert(path11, value) {
+  return { type: "insert", path: path11, value };
 }
-function CreateDelete(path10) {
-  return { type: "delete", path: path10 };
+function CreateDelete(path11) {
+  return { type: "delete", path: path11 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path10, left, right) {
+function* FromObject17(path11, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path10, right);
+    return yield CreateUpdate(path11, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -7911,7 +8028,7 @@ function* FromObject17(path10, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path10}/${key}`, right[key]);
+    yield CreateInsert(`${path11}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -7920,52 +8037,52 @@ function* FromObject17(path10, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path10}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path11}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path10}/${key}`);
+    yield CreateDelete(`${path11}/${key}`);
   }
 }
-function* FromArray13(path10, left, right) {
+function* FromArray13(path11, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path10, right);
+    return yield CreateUpdate(path11, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path10}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path11}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path10}/${i}`, right[i]);
+    yield CreateInsert(`${path11}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path10}/${i}`);
+    yield CreateDelete(`${path11}/${i}`);
   }
 }
-function* FromTypedArray2(path10, left, right) {
+function* FromTypedArray2(path11, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path10}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path11}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path10, right);
+    return yield CreateUpdate(path11, right);
   }
 }
-function* FromUnknown(path10, left, right) {
+function* FromUnknown(path11, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path10, right);
+  yield CreateUpdate(path11, right);
 }
-function* FromValue4(path10, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path10, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path10, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path10, left, right) : yield* FromUnknown(path10, left, right);
+function* FromValue4(path11, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path11, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path11, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path11, left, right) : yield* FromUnknown(path11, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8399,7 +8516,7 @@ async function loadProjectConfig(repo, hostFile) {
 }
 async function readOptional(repo, name) {
   try {
-    return await readFile(path2.join(repo, ".cw", name), "utf8");
+    return await readFile(path3.join(repo, ".cw", name), "utf8");
   } catch (error) {
     if (isNotFound(error)) return null;
     throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
@@ -8478,113 +8595,12 @@ function normalizeProtectedPath(value) {
 }
 
 // src/core/flow.ts
-import path8 from "node:path";
-
-// src/core/gitstate.ts
-import { spawn } from "node:child_process";
-async function repoToplevel(dir) {
-  const result = await git(dir, ["rev-parse", "--show-toplevel"]);
-  if (result.code !== 0) return null;
-  return result.stdout.trim();
-}
-function git(repo, args) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("git", args, {
-      cwd: repo,
-      env: {
-        PATH: process.env.PATH,
-        HOME: process.env.HOME,
-        GIT_CONFIG_COUNT: "0"
-      }
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-
-// src/core/auto.ts
-var DIFF_CAP = 8e4;
-var ACTION_CAP = 40;
-var ACTION_DETAIL_CAP = 2e3;
-function renderActions(actions) {
-  if (actions.length === 0) return "";
-  const shown = [];
-  let omitted = 0;
-  for (const action of actions) {
-    const isWrite = action.tool !== "bash" && action.tool !== "powershell";
-    if (isWrite && actions.length - omitted > ACTION_CAP) {
-      omitted += 1;
-      continue;
-    }
-    if (shown.length >= ACTION_CAP || action.detail.length > ACTION_DETAIL_CAP) {
-      omitted += 1;
-      continue;
-    }
-    shown.push(`${shown.length + 1}. ${action.tool} ${action.detail}`);
-  }
-  const rest = omitted > 0 ? `
-\uFF08\u53E6\u6709 ${omitted} \u6761\u672A\u5217\u51FA\uFF09` : "";
-  return `
-\u672C\u56DE\u5408\u7684\u5DE5\u5177\u8C03\u7528\uFF08\u4E0D\u662F\u6267\u884C\u7ED3\u679C\uFF0C\u5171 ${actions.length} \u6761\uFF09\uFF1A
-${shown.join("\n")}${rest}
-`;
-}
-async function workingDiff(repo) {
-  const run = async (args) => {
-    try {
-      const result = await git(repo, args);
-      return result.code === 0 ? result.stdout : null;
-    } catch {
-      return null;
-    }
-  };
-  const tracked = await run(["diff", "HEAD", "--no-ext-diff", "--no-color"]);
-  if (tracked === null) return null;
-  const untracked = await run(["ls-files", "--others", "--exclude-standard", "--", ":!.cw"]);
-  const names = untracked === null ? [] : untracked.split("\n").filter((line) => line !== "");
-  const tail = names.length === 0 ? "" : `
-# \u672A\u8DDF\u8E2A\u7684\u65B0\u6587\u4EF6\uFF08\u53EA\u5217\u540D\u5B57\uFF09\uFF1A
-${names.map((name) => `# ${name}`).join("\n")}
-`;
-  const body = `${tracked}${tail}`;
-  if (body.trim() === "") return "";
-  return body.length > DIFF_CAP ? `${body.slice(0, DIFF_CAP)}
-# \u2026\uFF08diff \u8D85\u8FC7 ${DIFF_CAP} \u5B57\u7B26\uFF0C\u5DF2\u622A\u65AD\uFF09
-` : body;
-}
-function chronicleReport(request, files, checkLine) {
-  const list = files.length === 0 ? "\uFF08\u65E0\uFF09" : files.slice(0, 40).join("\n");
-  return `\u4E00\u8F6E\u5DE5\u4F5C\u7ED3\u675F\u3002
-
-\u7528\u6237\u8BF7\u6C42\uFF1A
-${request.trim() === "" ? "\uFF08\u672A\u53D6\u5230\uFF09" : request.slice(0, 2e3)}
-
-\u6539\u52A8\u7684\u6587\u4EF6\uFF1A
-${list}
-${checkLine === null ? "" : `
-\u7ED3\u675F\u68C0\u67E5\uFF1A${checkLine}
-`}
-\u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toISOString()}\u3002\u63D0\u4EA4\u4FE1\u606F\u4E0E\u65E5\u671F\u8BF7\u4EE5\u4ED3\u5E93\u4E3A\u51C6\uFF0C\u4E0D\u8981\u7F16\u9020\u3002`;
-}
-function changedFiles(diff) {
-  const seen = /* @__PURE__ */ new Set();
-  for (const match of diff.matchAll(/^diff --git a\/(.+?) b\/\1$/gm)) seen.add(match[1]);
-  for (const match of diff.matchAll(/^# (?!未跟踪|…)(.+)$/gm)) seen.add(match[1]);
-  return [...seen];
-}
+import path9 from "node:path";
 
 // src/core/check.ts
-import { mkdtemp, open as open2, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path3 from "node:path";
+import { mkdtemp as mkdtemp2, open as open2, rm as rm2 } from "node:fs/promises";
+import { tmpdir as tmpdir2 } from "node:os";
+import path4 from "node:path";
 
 // src/core/process.ts
 import { spawn as spawn2 } from "node:child_process";
@@ -8764,9 +8780,9 @@ function delay(ms) {
 var TAIL_LINES = 80;
 var TAIL_BYTES = 16 * 1024;
 async function runEndCheck(request) {
-  const directory = await mkdtemp(path3.join(tmpdir(), "cw-check-"));
-  const stdoutPath = path3.join(directory, "stdout.log");
-  const stderrPath = path3.join(directory, "stderr.log");
+  const directory = await mkdtemp2(path4.join(tmpdir2(), "cw-check-"));
+  const stdoutPath = path4.join(directory, "stdout.log");
+  const stderrPath = path4.join(directory, "stderr.log");
   const started = Date.now();
   let run = null;
   try {
@@ -8795,7 +8811,7 @@ async function runEndCheck(request) {
     };
   } finally {
     run?.dispose();
-    await rm(directory, { recursive: true, force: true });
+    await rm2(directory, { recursive: true, force: true });
   }
 }
 function checkPassed(outcome) {
@@ -8852,16 +8868,16 @@ async function readTail(file) {
 // src/core/meter.ts
 import { constants } from "node:fs";
 import { lstat as lstat2, mkdir, open as open3 } from "node:fs/promises";
-import path4 from "node:path";
+import path5 from "node:path";
 var APPEND_FLAGS = constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW;
 async function appendMeterLine(repo, record) {
-  const dir = path4.join(repo, ".cw");
+  const dir = path5.join(repo, ".cw");
   await mkdir(dir, { recursive: true });
   const stat = await lstat2(dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165\u8BA1\u91CF");
   }
-  const handle = await open3(path4.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
+  const handle = await open3(path5.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
   try {
     await handle.writeFile(`${JSON.stringify(record)}
 `);
@@ -8973,30 +8989,30 @@ ${plan}`;
 }
 
 // src/core/protect.ts
-import path5 from "node:path";
+import path6 from "node:path";
 var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
 var GOAL_FILE = ".cw/goal.md";
 function isProtected(relative, patterns) {
-  const normalized = relative.split(path5.sep).join("/");
+  const normalized = relative.split(path6.sep).join("/");
   if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
 // src/roles/tools.ts
 import { readFile as readFile2 } from "node:fs/promises";
-import path7 from "node:path";
+import path8 from "node:path";
 
 // src/core/cwfile.ts
 import { lstat as lstat3, mkdir as mkdir2, rename, writeFile } from "node:fs/promises";
-import path6 from "node:path";
+import path7 from "node:path";
 async function writeCwFile(repo, name, content) {
-  const dir = path6.join(repo, ".cw");
+  const dir = path7.join(repo, ".cw");
   await mkdir2(dir, { recursive: true });
   const stat = await lstat3(dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
   }
-  const target = path6.join(dir, name);
+  const target = path7.join(dir, name);
   const temp = `${target}.${process.pid}.tmp`;
   await writeFile(temp, content);
   await rename(temp, target);
@@ -9210,7 +9226,7 @@ ${run.answer}`
 }
 async function readHistory(repo) {
   try {
-    return await readFile2(path7.join(repo, ".cw", HISTORY_FILE), "utf8");
+    return await readFile2(path8.join(repo, ".cw", HISTORY_FILE), "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -9285,9 +9301,29 @@ async function checkProtectedTarget(root, cwd, patterns, raw) {
   return null;
 }
 function toRepoRelative(repoRoot, cwd, value) {
-  const relative = path8.relative(repoRoot, path8.resolve(cwd, value));
-  if (relative === "" || relative.startsWith("..") || path8.isAbsolute(relative)) return null;
-  return relative.split(path8.sep).join("/");
+  const relative = path9.relative(repoRoot, path9.resolve(cwd, value));
+  if (relative === "" || relative.startsWith("..") || path9.isAbsolute(relative)) return null;
+  return relative.split(path9.sep).join("/");
+}
+async function checkGoalPaths(root, cwd, paths) {
+  try {
+    const realCwd = await realpathOr(cwd);
+    for (const raw of paths) {
+      const lexical = toRepoRelative(root, realCwd, raw);
+      if (lexical === null) continue;
+      if (lexical === GOAL_FILE) return PROTECTED_REASON(GOAL_FILE);
+      let resolved;
+      try {
+        resolved = await resolveWriteTarget(root, lexical);
+      } catch {
+        continue;
+      }
+      if (resolved === GOAL_FILE) return `${PROTECTED_REASON(GOAL_FILE)}\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u8BE5\u53D7\u4FDD\u62A4\u6587\u4EF6\uFF09`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 async function endCheck(params) {
   const { root, project, session, signal } = params;
@@ -9348,7 +9384,8 @@ async function runAuto(params, checkLine) {
   const { root, project, session, signal } = params;
   try {
     if (!project.auto.review && !project.auto.chronicle) return none;
-    const diff = await workingDiff(root);
+    const base = await params.base();
+    const diff = await workingDiff(root, base);
     const changed = diff !== null && diff.trim() !== "";
     const actions = renderActions(await params.actions());
     const plan = {
@@ -9359,6 +9396,7 @@ async function runAuto(params, checkLine) {
     if (!plan.review && !plan.overReview && !plan.chronicle) return none;
     const ctx = { repo: root, session, project, runner: params.runner };
     const request = await params.prompt();
+    let shown = null;
     if (plan.review || plan.overReview) {
       const empty = Promise.resolve({ answer: null });
       const [correct, over] = await Promise.all([
@@ -9373,16 +9411,19 @@ async function runAuto(params, checkLine) {
 
 ${findings.join("\n\n")}` };
         }
-        return { text: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
+        shown = `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
 
-${findings.join("\n\n")}`, findings: null };
+${findings.join("\n\n")}`;
       }
     }
     if (plan.chronicle) {
-      const report = chronicleReport(request, changedFiles(diff), checkLine);
-      await chronicle(ctx, project.models.historian, report, signal);
+      try {
+        const report = chronicleReport(request, await changedFiles(root, base), checkLine);
+        await chronicle(ctx, project.models.historian, report, signal);
+      } catch {
+      }
     }
-    return none;
+    return { text: shown, findings: null };
   } catch {
     return none;
   }
@@ -9423,7 +9464,7 @@ async function pausePlan(params) {
 
 // src/core/goal.ts
 import { readFile as readFile3 } from "node:fs/promises";
-import path9 from "node:path";
+import path10 from "node:path";
 
 // src/roles/explorer.md
 var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
@@ -9504,7 +9545,7 @@ Stop when the current question is answered. Do not ask whether to continue.`;
 async function readGoal(repo) {
   if (repo === null) return null;
   try {
-    return await readFile3(path9.join(repo, GOAL_FILE), "utf8");
+    return await readFile3(path10.join(repo, GOAL_FILE), "utf8");
   } catch {
     return null;
   }
@@ -9630,7 +9671,7 @@ async function setupPlugin(ctx) {
   const turnOf = (sessionID) => {
     let turn = turns.get(sessionID);
     if (turn === void 0) {
-      turn = { repair: false, findings: false, pause: false, relayed: false, prompt: "", actions: [] };
+      turn = { repair: false, findings: false, pause: false, relayed: false, prompt: "", actions: [], base: null };
       turns.set(sessionID, turn);
     }
     return turn;
@@ -9678,9 +9719,15 @@ async function setupPlugin(ctx) {
       text: withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), await readGoal(root))
     });
   });
-  await ctx.session.hook("prompt", (event) => {
+  await ctx.session.hook("prompt", async (event) => {
     if (roleSessions.has(event.sessionID)) return;
-    turns.set(event.sessionID, { repair: false, findings: false, pause: false, relayed: false, prompt: event.prompt?.text ?? "", actions: [] });
+    const turn = { repair: false, findings: false, pause: false, relayed: false, prompt: event.prompt?.text ?? "", actions: [], base: null };
+    turns.set(event.sessionID, turn);
+    try {
+      const project = await load();
+      if (project !== null && (project.auto.review || project.auto.chronicle)) turn.base = await snapshotTree(root);
+    } catch {
+    }
   });
   await ctx.tool.hook("execute.before", async (event) => {
     if (event.tool === "shell") {
@@ -9691,6 +9738,11 @@ async function setupPlugin(ctx) {
       return;
     }
     if (event.tool !== "write" && event.tool !== "edit" && event.tool !== "patch") return;
+    const input = event.input ?? {};
+    const target = input.path;
+    const paths = event.tool === "patch" ? typeof input.patchText === "string" ? patchPaths(input.patchText) : [] : typeof target === "string" && target !== "" ? [target] : [];
+    const goal = await checkGoalPaths(root, directory, paths);
+    if (goal !== null) throw new Error(goal);
     let project;
     try {
       project = await load();
@@ -9698,9 +9750,6 @@ async function setupPlugin(ctx) {
       return;
     }
     if (project === null) return;
-    const input = event.input ?? {};
-    const target = input.path;
-    const paths = event.tool === "patch" ? typeof input.patchText === "string" ? patchPaths(input.patchText) : [] : typeof target === "string" && target !== "" ? [target] : [];
     const refusal = await checkPaths(root, directory, project, paths);
     if (refusal !== null) throw new Error(refusal);
     if (await isChild(event.sessionID)) return;
@@ -9744,7 +9793,8 @@ async function setupPlugin(ctx) {
           signal: tracked.signal,
           claim: claimFor(sessionID),
           prompt: async () => turn.prompt,
-          actions: async () => turn.actions
+          actions: async () => turn.actions,
+          base: async () => turn.base
         });
       } catch (error) {
         result = { continueWith: null, report: `[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message2(error)}`, attention: true };
