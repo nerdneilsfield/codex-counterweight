@@ -9109,6 +9109,7 @@ async function runAndMeter(ctx, role, tool, model, message3, signal, askedS) {
   }
   const meterNote = meterError === null ? "" : `\uFF1B\u7528\u91CF\u672A\u80FD\u5199\u5165\u8BA1\u91CF\uFF08${meterError}\uFF09`;
   if (run.error !== null) {
+    if (!run.cancelled) ctx.failed?.push({ role, reason: run.error });
     await recordEvent(repo, session, role, {
       outcome: run.budget === true ? "budget" : "failed",
       error: run.error,
@@ -9285,7 +9286,11 @@ async function endCheck(params) {
     texts.push(checkReport);
   }
   const auto = await runAuto(params, checkReport);
-  if (auto.findings !== null) return { continueWith: auto.findings, report: checkReport, attention };
+  if (auto.failure !== null) {
+    texts.push(auto.failure);
+    attention = true;
+  }
+  if (auto.findings !== null) return { continueWith: auto.findings, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
   if (auto.text !== null) {
     texts.push(auto.text);
     attention = true;
@@ -9293,7 +9298,7 @@ async function endCheck(params) {
   return { continueWith: null, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
 }
 async function runAuto(params, checkLine) {
-  const none = { text: null, findings: null };
+  const none = { text: null, findings: null, failure: null };
   const { root, project, session, signal } = params;
   try {
     if (!project.auto.review && !project.auto.chronicle) return none;
@@ -9307,7 +9312,9 @@ async function runAuto(params, checkLine) {
       chronicle: project.auto.chronicle && changed
     };
     if (!plan.review && !plan.overReview && !plan.chronicle) return none;
-    const ctx = { repo: root, session, project, runner: params.runner };
+    const failed = [];
+    const ctx = { repo: root, session, project, runner: params.runner, failed };
+    const failureLine = () => failed.length === 0 ? null : `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u672A\u5B8C\u6210\uFF1A${failed.map((item) => `${item.role} ${item.reason}`).join("\uFF1B")}`;
     const request = await params.prompt();
     let shown = null;
     if (plan.review || plan.overReview) {
@@ -9322,7 +9329,7 @@ async function runAuto(params, checkLine) {
         if (changed && first) {
           return { text: null, findings: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u5904\u7406\u6216\u8BF4\u660E\u4E3A\u4EC0\u4E48\u4E0D\u5904\u7406\uFF1A
 
-${findings.join("\n\n")}` };
+${findings.join("\n\n")}`, failure: failureLine() };
         }
         shown = `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
 
@@ -9336,7 +9343,7 @@ ${findings.join("\n\n")}`;
       } catch {
       }
     }
-    return { text: shown, findings: null };
+    return { text: shown, findings: null, failure: failureLine() };
   } catch {
     return none;
   }

@@ -18,6 +18,8 @@ export interface RoleContext {
   session: string;
   project: ProjectConfig;
   runner: RoleRunner;
+  /** 给了就收集本次上下文里失败（非取消）的角色，`[auto]` 靠它在回合结束时说明。 */
+  failed?: Array<{ role: RoleName; reason: string }>;
 }
 
 /**
@@ -160,6 +162,7 @@ export async function runAndMeter(
   }
   const meterNote = meterError === null ? "" : `；用量未能写入计量（${meterError}）`;
   if (run.error !== null) {
+    if (!run.cancelled) ctx.failed?.push({ role, reason: run.error });
     await recordEvent(repo, session, role, {
       outcome: run.budget === true ? "budget" : "failed", error: run.error, tokens: spent, ms: Date.now() - started,
       timed_out: run.timedOut, cancelled: run.cancelled,

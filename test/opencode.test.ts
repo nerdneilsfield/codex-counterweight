@@ -210,7 +210,7 @@ describe("end of turn", () => {
       expect([...fake.sessions.keys()].filter((id) => id !== "root")).toHaveLength(4);
     }, 30_000);
 
-    it("keeps the findings when the meter cannot be written, and adds nothing when reviewers fail", async () => {
+    it("keeps the findings when the meter cannot be written, and relays the failed reviewers once", async () => {
       await project('version = 1\n[auto]\nreview = true\n');
       await mkdir(path.join(repo, ".cw/meter.jsonl"));
       const fake = await start({ answers });
@@ -219,8 +219,13 @@ describe("end of turn", () => {
       cleanup?.();
       const failing = await start({ fail: ["p/rv", "p/ov"] });
       await prompt(failing);
+      // The baseline is taken at the prompt, so the turn's edit comes after it.
+      await writeFile(path.join(repo, "a.txt"), "3\n");
       await idle(failing);
-      expect(failing.synthetic).toEqual([]);
+      expect(failing.synthetic).toHaveLength(1);
+      expect(failing.synthetic[0]!.text).toContain("自动审查未完成：review 未正常结束；over_review 未正常结束");
+      await idle(failing);
+      expect(failing.synthetic).toHaveLength(1);
     });
   });
 });

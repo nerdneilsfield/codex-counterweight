@@ -92,7 +92,7 @@ Plan readiness: ready。
 
 - [x] 1 缺 `[check]` 提示
 - [x] 2 角色成本
-- [ ] 3 `[auto]` 失败可见
+- [x] 3 `[auto]` 失败可见
 - [ ] 4 高危命令和范围锁定
 - [ ] 5 `inject` 事件
 - [ ] 6 chronicle 事件

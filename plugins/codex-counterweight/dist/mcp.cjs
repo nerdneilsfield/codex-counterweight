@@ -8723,6 +8723,7 @@ async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
   }
   const meterNote = meterError === null ? "" : `\uFF1B\u7528\u91CF\u672A\u80FD\u5199\u5165\u8BA1\u91CF\uFF08${meterError}\uFF09`;
   if (run.error !== null) {
+    if (!run.cancelled) ctx.failed?.push({ role, reason: run.error });
     await recordEvent(repo, session, role, {
       outcome: run.budget === true ? "budget" : "failed",
       error: run.error,

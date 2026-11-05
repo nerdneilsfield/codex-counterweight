@@ -192,6 +192,28 @@ describe("auto review", () => {
     expect((await fakeCalls(sandbox)).filter((call) => call.model === "hs")[0]!.stdin).toContain("a.txt");
   }, 30_000);
 
+  it("says which reviewer did not finish, and why, without changing the verdict", async () => {
+    await writeConfig('version = 1\n[check]\ncmd = ["true"]\n[auto]\nreview = true\n');
+    await installFakeCodex(sandbox, { byModel: { rv: { mode: "noturn", failure: "model at capacity" }, ov: { answer: "none" } } });
+    const { out } = await runHook({ hook_event_name: "Stop" });
+    expect(out.decision).toBeUndefined();
+    expect(out.systemMessage).toContain("[counterweight] 自动审查未完成：review 未正常结束");
+    expect(out.systemMessage).toContain("model at capacity");
+    expect(out.systemMessage).toContain("通过");
+    expect(out.systemMessage).not.toContain("over_review");
+  });
+
+  it("keeps the failure line when the other reviewer's findings continue the turn", async () => {
+    await writeConfig('version = 1\n[auto]\nreview = true\n');
+    await installFakeCodex(sandbox, {
+      byModel: { rv: { mode: "noturn", failure: "boom" }, ov: { answer: "CUT `x`\n删：a\n留：b\n因为：c" } },
+    });
+    const { out } = await runHook({ hook_event_name: "Stop" });
+    expect(out.decision).toBe("block");
+    expect(out.reason).toContain("CUT `x`");
+    expect(out.systemMessage).toContain("自动审查未完成：review");
+  });
+
   it("does not continue when the reviewers find nothing", async () => {
     await writeConfig('version = 1\n[auto]\nreview = true\n');
     await installFakeCodex(sandbox, { default: { answer: "none" } });

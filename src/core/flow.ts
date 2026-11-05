@@ -173,8 +173,13 @@ export async function endCheck(params: {
     texts.push(checkReport);
   }
   const auto = await runAuto(params, checkReport);
+  // 角色没跑完要让用户看到，不改检查结论，也不续跑。
+  if (auto.failure !== null) {
+    texts.push(auto.failure);
+    attention = true;
+  }
   // 审查发现续跑时，检查报告留给用户，发现作为续跑内容交回模型。
-  if (auto.findings !== null) return { continueWith: auto.findings, report: checkReport, attention };
+  if (auto.findings !== null) return { continueWith: auto.findings, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
   if (auto.text !== null) {
     texts.push(auto.text);
     attention = true;
@@ -189,8 +194,8 @@ export async function endCheck(params: {
  */
 async function runAuto(
   params: Parameters<typeof endCheck>[0], checkLine: string | null,
-): Promise<{ text: string | null; findings: string | null }> {
-  const none = { text: null, findings: null };
+): Promise<{ text: string | null; findings: string | null; failure: string | null }> {
+  const none = { text: null, findings: null, failure: null };
   const { root, project, session, signal } = params;
   try {
     if (!project.auto.review && !project.auto.chronicle) return none;
@@ -205,7 +210,10 @@ async function runAuto(
       chronicle: project.auto.chronicle && changed,
     };
     if (!plan.review && !plan.overReview && !plan.chronicle) return none;
-    const ctx: RoleContext = { repo: root, session, project, runner: params.runner };
+    const failed: NonNullable<RoleContext["failed"]> = [];
+    const ctx: RoleContext = { repo: root, session, project, runner: params.runner, failed };
+    const failureLine = (): string | null => failed.length === 0 ? null
+      : `[counterweight] 自动审查未完成：${failed.map((item) => `${item.role} ${item.reason}`).join("；")}`;
     const request = await params.prompt();
     let shown: string | null = null;
     if (plan.review || plan.overReview) {
@@ -226,7 +234,7 @@ async function runAuto(
         // 额度照样用掉：发现在本回合只提示一次。
         const first = await params.claim("findings");
         if (changed && first) {
-          return { text: null, findings: `[counterweight] 自动审查有发现，处理或说明为什么不处理：\n\n${findings.join("\n\n")}` };
+          return { text: null, findings: `[counterweight] 自动审查有发现，处理或说明为什么不处理：\n\n${findings.join("\n\n")}`, failure: failureLine() };
         }
         shown = `[counterweight] 自动审查有发现，不再续跑：\n\n${findings.join("\n\n")}`;
       }
@@ -241,7 +249,7 @@ async function runAuto(
         // Best-effort.
       }
     }
-    return { text: shown, findings: null };
+    return { text: shown, findings: null, failure: failureLine() };
   } catch {
     return none;
   }

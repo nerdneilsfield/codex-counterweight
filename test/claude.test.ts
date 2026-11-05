@@ -118,9 +118,19 @@ describe("auto review", () => {
     expect((await hook({ hook_event_name: "Stop" })).out.reason).toContain("WRONG `a.txt:1`");
   });
 
-  it("yields no text when the reviewers fail", async () => {
+  it("names the failed reviewers and their reasons, and does not continue", async () => {
     await project('version = 1\n[auto]\nreview = true\n');
     await installFakeClaude(sandbox, { default: { failure: "overloaded" } });
+    const { out } = await hook({ hook_event_name: "Stop" });
+    expect(out.decision).toBeUndefined();
+    expect(out.systemMessage).toContain("[counterweight] 自动审查未完成：");
+    expect(out.systemMessage).toContain("review 未正常结束（error_during_execution：overloaded）");
+    expect(out.systemMessage).toContain("over_review 未正常结束");
+  });
+
+  it("is silent about reviewers that finished", async () => {
+    await project('version = 1\n[auto]\nreview = true\n');
+    await installFakeClaude(sandbox, { default: { answer: "none" } });
     expect((await hook({ hook_event_name: "Stop" })).stdout).toBe("");
   });
 });
