@@ -3,6 +3,7 @@
  * 只读靠子会话的 `permissions`；超时或取消时中断子会话（子会话不随调用方的 abort 停止）。
  * 用量由插件的事件订阅记录，所以这里的 `usage` 为空，不重复记账。
  */
+import { budgetMessage, stepLimit } from "../../core/budget.js";
 import type { RoleName } from "../../roles/prompts.js";
 import type { RoleRunner } from "../../roles/run.js";
 import { lastAnswer, type SessionMessage } from "./transcript.js";
@@ -32,8 +33,11 @@ const permissions = (role: RoleName) => role === "planner"
   ? [{ action: "*", resource: "*", effect: "deny" as const }]
   : [{ action: "edit", resource: "*", effect: "deny" as const }, { action: "shell", resource: "*", effect: "deny" as const }];
 
+/** 角色子会话的步数：`session.step.ended` 每来一次加一，超过上限就调用 `exceed`。 */
+export type StepWatch = Map<string, { count: number; limit: number; exceed: () => void }>;
+
 export function makeRunner(
-  session: SessionApi, parentID: string, roleSessions: Map<string, RoleName>,
+  session: SessionApi, parentID: string, roleSessions: Map<string, RoleName>, steps: StepWatch,
 ): RoleRunner {
   return async (request) => {
     const failure = (error: string, flags: { timedOut?: boolean; cancelled?: boolean } = {}) =>
@@ -42,6 +46,8 @@ export function makeRunner(
     let child: string | null = null;
     let timedOut = false;
     let cancelled = false;
+    let overBudget = false;
+    const limit = stepLimit(request.role);
     const stop = () => {
       if (child !== null) void session.interrupt({ sessionID: child }).catch(() => {});
     };
@@ -52,6 +58,7 @@ export function makeRunner(
       const info = await session.create({ parentID, model: splitModel(request.model), permissions: permissions(request.role) });
       child = info.id;
       roleSessions.set(child, request.role);
+      steps.set(child, { count: 0, limit, exceed: () => { overBudget = true; stop(); } });
       if (cancelled || timedOut) stop();
       else {
         await session.prompt({ sessionID: child, text: request.message });
@@ -59,6 +66,8 @@ export function makeRunner(
       }
       if (cancelled) return failure("已被取消", { cancelled: true });
       if (timedOut) return failure("超时，子会话已中断", { timedOut: true });
+      // 中断后最后一条助手消息是被打断的，不看它。
+      if (overBudget) return { ...failure(budgetMessage(limit)), budget: true };
       const answer = lastAnswer(await session.context({ sessionID: child }));
       if (answer === null) return failure("没有最终回答");
       if (answer.failed) return failure("未正常结束");
@@ -71,7 +80,10 @@ export function makeRunner(
     } finally {
       clearTimeout(timer);
       request.signal?.removeEventListener("abort", onAbort);
-      if (child !== null) roleSessions.delete(child);
+      if (child !== null) {
+        roleSessions.delete(child);
+        steps.delete(child);
+      }
     }
   };
 }

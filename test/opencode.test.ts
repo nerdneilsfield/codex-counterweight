@@ -422,3 +422,40 @@ describe("metering and setup", () => {
     expect(fake.synthetic[0]!.text).toContain(".cw/opencode.toml");
   });
 });
+
+describe("role step budget", () => {
+  beforeEach(async () => {
+    await project("version = 1\n");
+    await host('[models]\nreview = "prov/rv"\n');
+  });
+
+  const step = (sessionID: string) => ({
+    type: "session.step.ended",
+    data: { sessionID, cost: 0, tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } },
+  });
+
+  async function run(steps: number) {
+    const fake = await start({ hang: ["prov/rv"] });
+    const running = fake.tools.get("cw_review").execute({ request: "r", diff: "d" }, { sessionID: "root", signal: new AbortController().signal });
+    await until(() => fake.sessions.has("child1"), 5_000);
+    for (let i = 0; i < steps; i++) fake.emit(step("child1"));
+    return { fake, running };
+  }
+
+  it("interrupts the child session on the 31st step and records outcome budget", async () => {
+    const { fake, running } = await run(31);
+    const result = await running;
+    expect(fake.interrupts).toEqual(["child1"]);
+    expect(result.content).toContain("已达 30 步上限，已终止，拆小输入后重试");
+    expect((await meterLines()).find((line) => line.kind === "event" && line.event === "review").detail)
+      .toMatchObject({ outcome: "budget", timed_out: false, cancelled: false });
+  });
+
+  it("does not interrupt at exactly 30 steps", async () => {
+    const { fake, running } = await run(30);
+    await until(async () => (await meterLines()).filter((line) => line.kind === "usage").length === 30, 5_000);
+    expect(fake.interrupts).toEqual([]);
+    await fake.ctx.session.interrupt({ sessionID: "child1" });
+    await running;
+  });
+});

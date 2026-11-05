@@ -44,6 +44,8 @@ export interface RoleRun {
   usage: UsageSample[];
   timedOut: boolean;
   cancelled: boolean;
+  /** 步数超过 `stepLimit` 被终止；此时 `error` 是 `budgetMessage`。 */
+  budget?: boolean;
 }
 
 export interface RoleRequest {

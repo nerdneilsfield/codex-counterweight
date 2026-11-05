@@ -8724,7 +8724,7 @@ async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
   const meterNote = meterError === null ? "" : `\uFF1B\u7528\u91CF\u672A\u80FD\u5199\u5165\u8BA1\u91CF\uFF08${meterError}\uFF09`;
   if (run.error !== null) {
     await recordEvent(repo, session, role, {
-      outcome: "failed",
+      outcome: run.budget === true ? "budget" : "failed",
       error: run.error,
       tokens: spent,
       ms: Date.now() - started,
@@ -8883,19 +8883,53 @@ function serveMcp(host) {
 }
 
 // src/adapters/codex/runner.ts
-var import_promises7 = require("node:fs/promises");
+var import_promises8 = require("node:fs/promises");
 var import_node_os = require("node:os");
 var import_node_path6 = __toESM(require("node:path"), 1);
 
+// src/core/budget.ts
+var import_promises6 = require("node:fs/promises");
+function stepLimit(role) {
+  return role === "research" ? 80 : role === "planner" ? 1 : 30;
+}
+var budgetMessage = (limit) => `\u5DF2\u8FBE ${limit} \u6B65\u4E0A\u9650\uFF0C\u5DF2\u7EC8\u6B62\uFF0C\u62C6\u5C0F\u8F93\u5165\u540E\u91CD\u8BD5`;
+var POLL_MS = 500;
+function watchSteps(options) {
+  let timer;
+  let reading = false;
+  const stop = () => {
+    if (timer !== void 0) clearInterval(timer);
+    timer = void 0;
+    options.signal?.removeEventListener("abort", stop);
+  };
+  if (options.signal?.aborted) return stop;
+  options.signal?.addEventListener("abort", stop, { once: true });
+  timer = setInterval(() => {
+    if (reading) return;
+    reading = true;
+    (0, import_promises6.readFile)(options.file, "utf8").then((text) => {
+      if (timer !== void 0 && options.count(text) > options.limit) {
+        stop();
+        options.onExceed();
+      }
+    }).catch(() => {
+    }).finally(() => {
+      reading = false;
+    });
+  }, options.intervalMs ?? POLL_MS);
+  timer.unref();
+  return stop;
+}
+
 // src/core/process.ts
 var import_node_child_process2 = require("node:child_process");
-var import_promises6 = require("node:fs/promises");
+var import_promises7 = require("node:fs/promises");
 var KILL_GRACE_MS = 5e3;
 var GROUP_POLL_MS = 50;
 async function runProcess(options) {
-  const stdout = await (0, import_promises6.open)(options.stdoutPath, "wx");
-  const stderr = await (0, import_promises6.open)(options.stderrPath, "wx");
-  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises6.open)(options.stdinPath, "r");
+  const stdout = await (0, import_promises7.open)(options.stdoutPath, "wx");
+  const stderr = await (0, import_promises7.open)(options.stderrPath, "wx");
+  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises7.open)(options.stdinPath, "r");
   const abort = linkAbort(options.signal, options.timeoutMs);
   let child;
   let watch;
@@ -9068,7 +9102,7 @@ var explorer_default = "You are a read-only code finder. You have read and grep.
 var historian_default = "You are the project historian. Read only. You keep one document: the development history of this repository.\n\nInput: the current document (it can be empty) and a report from the main agent. Fold the report into the document. Rewrite the whole document. Keep earlier entries unless the report corrects them. Use read and grep to check a claim when the repository can confirm it. Do not invent a date, a commit id, a number, or a cause. If the report does not give a fact and the repository cannot confirm it, leave it out.\n\nIf you cannot go on, reply with `ASK:` on the first line and your questions after it, and nothing else. Do this when only the main agent can settle the point: a missing date, an unknown cause or decision, or a conflict between the report and the repository. Do not write the document in that case.\n\nOtherwise reply with the full document and nothing else. The first line is a `# ` heading. Entries are in time order, newest last.\n\nLanguage: use the language of the current document. If it is empty, use the language of the report.\n\nThe two style guides below are targets, not limits. Stay as close to them as you can, but never drop a fact to satisfy a rule. Each entry must still carry what happened, when, who or what changed, why (when the report or repository says), and the evidence (commit, file, version). If a rule would force you to cut one of these, break the rule: split the sentence, add a sentence, or use a non-approved word and keep the meaning exact. Technical names, identifiers, and paths stay as they are.\n\nEnglish text follows ASD-STE100 (Simplified Technical English):\n- Use the approved words, each with its approved meaning only. Use one word for one thing.\n- Keep a sentence to 20 words or fewer in a procedure, 25 or fewer in a description.\n- One topic for each sentence. Six sentences or fewer in a paragraph.\n- Use the active voice. Use only the simple past, simple present, and simple future. Use the past for events.\n- Keep the articles (a, an, the). Do not use a gerund as a noun. Do not use a slang word or an idiom.\n\nChinese text follows the Xinhua news-agency dispatch style (\u65B0\u534E\u793E\u7535\u8BAF\u7A3F):\n- Each entry starts with a dateline: `\u65B0\u534E\u793E<\u4ED3\u5E93\u540D>X\u6708X\u65E5\u7535`. The date comes from the report or from the repository. Add the year when the entry is in another year.\n- The lead is one sentence: when, who, what was done, and the result. The rest follows in falling order of importance (\u5012\u91D1\u5B57\u5854).\n- Name the source with \u636E or \u8BF4, for example \u636E\u63D0\u4EA4\u8BB0\u5F55, \u636E\u6C47\u62A5. Give the commit, the version, and the file when you have them.\n- State facts. No praise, no \u91CD\u5927 or \u663E\u8457 type judgment, no exclamation mark, no colloquial or net slang.\n- Short sentences. One matter in a paragraph. Use Arabic numerals.\n- After the lead, add the background, the reason, the method, and the effect in as many short paragraphs as the facts need.\n";
 
 // src/roles/over-review.md
-var over_review_default = "You decide what in this diff did not earn its place. Read only. Ignore the implementer's rationale. Look only at this diff, the commands listed with it, or the paths you were given. Do not scan the repository. Do not edit. Do not review correctness.\n\nFor each addition, ask which of these is missing:\n\n- Process: a plan, an extra doc, or a session-only test that landed in the tree.\n- Complexity: an abstraction, dependency, config knob, fallback, retry, cache, or compatibility layer with no current caller, observed failure, or platform constraint.\n- Tests: a test with no independent oracle, or one that will not earn its future maintenance.\n- Knowledge: a comment or doc that repeats what the code or an existing doc already says.\n- Defense: a null check, fallback, retry, or second implementation added for a failure that has not happened and that sits on no trust boundary. A check stays when it guards user input, a process boundary, data loss, or authority.\n\n\"Might need it later\" is not a reason to keep it.\n\nThe input may list the turn's tool calls after the diff. Judge a command the same way as a line of code: it earns its place when it serves the request, including the reads, checks, and reruns needed to do the work. Report it only when nothing in the request calls for it. Reading, listing, and checking status are not findings. When one qualifies, write it as its own block with `CUT \\`command\\`` and the same three lines, and name the missing need in \u56E0\u4E3A. A command does not have to fit the five categories above.\n\nDo not cut: trust-boundary checks, accessibility behavior, data-loss protection, a published contract, a CI-required check, or a test or compatibility layer the user explicitly asked to keep.\n\nDo not suggest a replacement design, a refactor, a lint rule, or a convention.\n\nIf you cannot judge without a fact only the main agent has, reply with `ASK:` on the first line and the questions after it, and nothing else. Do this when the request is too vague to say what the change was meant to do, or the diff cuts off the context you need and the paths you may read do not hold it. Do not ask what you can find with read or grep. Do not ask for a design choice.\n\nWrite Chinese. One cut per block:\n\nCUT `path:symbol`\n\u5220\uFF1A<what goes>\n\u7559\uFF1A<what stays>\n\u56E0\u4E3A\uFF1A<which of the five is missing>\n\nIf nothing qualifies, reply with exactly `none`.\n";
+var over_review_default = "You decide what in this diff did not earn its place. Read only. Ignore the implementer's rationale. Look only at this diff, the commands listed with it, or the paths you were given. Do not scan the repository. Read only the files the diff touches and the direct callers you need to judge it. Do not edit. Do not review correctness.\n\nFor each addition, ask which of these is missing:\n\n- Process: a plan, an extra doc, or a session-only test that landed in the tree.\n- Complexity: an abstraction, dependency, config knob, fallback, retry, cache, or compatibility layer with no current caller, observed failure, or platform constraint.\n- Tests: a test with no independent oracle, or one that will not earn its future maintenance.\n- Knowledge: a comment or doc that repeats what the code or an existing doc already says.\n- Defense: a null check, fallback, retry, or second implementation added for a failure that has not happened and that sits on no trust boundary. A check stays when it guards user input, a process boundary, data loss, or authority.\n\n\"Might need it later\" is not a reason to keep it.\n\nThe input may list the turn's tool calls after the diff. Judge a command the same way as a line of code: it earns its place when it serves the request, including the reads, checks, and reruns needed to do the work. Report it only when nothing in the request calls for it. Reading, listing, and checking status are not findings. When one qualifies, write it as its own block with `CUT \\`command\\`` and the same three lines, and name the missing need in \u56E0\u4E3A. A command does not have to fit the five categories above.\n\nDo not cut: trust-boundary checks, accessibility behavior, data-loss protection, a published contract, a CI-required check, or a test or compatibility layer the user explicitly asked to keep.\n\nDo not suggest a replacement design, a refactor, a lint rule, or a convention.\n\nIf you cannot judge without a fact only the main agent has, reply with `ASK:` on the first line and the questions after it, and nothing else. Do this when the request is too vague to say what the change was meant to do, or the diff cuts off the context you need and the paths you may read do not hold it. Do not ask what you can find with read or grep. Do not ask for a design choice.\n\nWrite Chinese. One cut per block:\n\nCUT `path:symbol`\n\u5220\uFF1A<what goes>\n\u7559\uFF1A<what stays>\n\u56E0\u4E3A\uFF1A<which of the five is missing>\n\nIf nothing qualifies, reply with exactly `none`.\n";
 
 // src/roles/planner.md
 var planner_default = "You write one fix plan for a coding agent that is about to make its first edit to the repository. You have no tools. You cannot read files or run anything. Your input is the transcript of what the agent has done and seen so far, and the edit it is about to make.\n\nJudge from the transcript only. The agent has finished investigating; do not tell it to investigate again. If the transcript does not hold a fact you need, say so in one line under the plan instead of guessing.\n\nWrite the plan as four short parts, in this order:\n\n\u6839\u56E0\uFF1Awhat is actually wrong, and the evidence in the transcript that shows it.\n\u4F4D\u7F6E\uFF1Awhich files and symbols change, using only paths the transcript shows.\n\u505A\u6CD5\uFF1Ahow each change goes, in terms of behavior and contracts. No function bodies.\n\u7406\u7531\uFF1Awhy this approach over the nearest alternative the transcript makes plausible.\n\nIf the edit the agent is about to make does not match your plan, say which part differs and which one you think is right. The agent may disagree with you; it can see the code and you cannot.\n\nDo not review the agent's earlier work. Do not add steps for tests, docs, or hardening unless the transcript shows a failing check or an explicit requirement for them. Do not propose an abstraction, config, or fallback the transcript gives no reason for.\n\nWrite Chinese. Under 400 characters per part.\n";
@@ -9077,7 +9111,7 @@ var planner_default = "You write one fix plan for a coding agent that is about t
 var research_default = "You take a question the main model could not settle by reading the code in front of it. Read only. You do not implement, edit, or widen the question into a program of work.\n\nName the mechanism, the constraint, and the smallest explanation that accounts for what you actually read. The conclusion is the first paragraph. Evidence follows. Anything you did not read is `\u672A\u6838\u5B9E`. Do not fill the gap.\n\nNo refactor proposal, no roadmap.\n\nWrite Chinese directly, long and short sentences, no heading stack. Stop when the question is answered.\n";
 
 // src/roles/review.md
-var review_default = 'You review correctness. Read only. Your input is the request and the diff. You do not edit.\n\nJudge whether the requested behavior is actually there, whether existing callers still work, and whether the change breaks behavior the diff was not supposed to touch. Also report a weakened security check, accessibility behavior, data-loss guard, or trust boundary.\n\nDo not report missing abstractions, missing tests, missing config, future edge cases, or refactors. Do not propose a fix. "Might fail someday" is not a finding.\n\nIf you cannot judge without a fact only the main agent has, reply with `ASK:` on the first line and the questions after it, and nothing else. Do this when the request is too vague to say what the change was meant to do, or the diff cuts off the context you need and the paths you may read do not hold it. Do not ask what you can find with read or grep. Do not ask for a design choice.\n\nWrite Chinese. One finding per block:\n\nWRONG `path:symbol`\n\u671F\u671B\uFF1A<what the request requires>\n\u5B9E\u9645\uFF1A<what the diff does>\n\nIf nothing is wrong, reply with exactly `none`.\n';
+var review_default = 'You review correctness. Read only. Your input is the request and the diff. You do not edit.\n\nRead only the files the diff touches and the direct callers you need to judge it. Do not scan the repository.\n\nJudge whether the requested behavior is actually there, whether existing callers still work, and whether the change breaks behavior the diff was not supposed to touch. Also report a weakened security check, accessibility behavior, data-loss guard, or trust boundary.\n\nDo not report missing abstractions, missing tests, missing config, future edge cases, or refactors. Do not propose a fix. "Might fail someday" is not a finding.\n\nIf you cannot judge without a fact only the main agent has, reply with `ASK:` on the first line and the questions after it, and nothing else. Do this when the request is too vague to say what the change was meant to do, or the diff cuts off the context you need and the paths you may read do not hold it. Do not ask what you can find with read or grep. Do not ask for a design choice.\n\nWrite Chinese. One finding per block:\n\nWRONG `path:symbol`\n\u671F\u671B\uFF1A<what the request requires>\n\u5B9E\u9645\uFF1A<what the diff does>\n\nIf nothing is wrong, reply with exactly `none`.\n';
 
 // src/roles/prompts.ts
 var PROMPTS = {
@@ -9113,34 +9147,60 @@ function roleArgs(request) {
   ];
 }
 async function runRole(request) {
-  const scratch = await (0, import_promises7.mkdtemp)(import_node_path6.default.join((0, import_node_os.tmpdir)(), "cw-role-"));
+  const scratch = await (0, import_promises8.mkdtemp)(import_node_path6.default.join((0, import_node_os.tmpdir)(), "cw-role-"));
   try {
     const messagePath = import_node_path6.default.join(scratch, "message.md");
-    await (0, import_promises7.writeFile)(messagePath, request.message);
-    const outcome = await runProcess({
-      cwd: request.workRoot,
-      cmd: ["codex", ...roleArgs(request)],
-      env: { ...process.env },
-      timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
-      stdoutPath: import_node_path6.default.join(scratch, "stdout.jsonl"),
-      stderrPath: import_node_path6.default.join(scratch, "stderr.log"),
-      stdinPath: messagePath,
-      signal: request.signal
+    await (0, import_promises8.writeFile)(messagePath, request.message);
+    const limit = stepLimit(request.role);
+    const own = new AbortController();
+    const forward = () => own.abort();
+    if (request.signal?.aborted) forward();
+    else request.signal?.addEventListener("abort", forward, { once: true });
+    let overBudget = false;
+    const stdoutPath = import_node_path6.default.join(scratch, "stdout.jsonl");
+    const stopWatch = watchSteps({
+      file: stdoutPath,
+      limit,
+      count: countToolItems,
+      signal: own.signal,
+      onExceed: () => {
+        overBudget = true;
+        own.abort();
+      }
     });
+    let outcome;
+    try {
+      outcome = await runProcess({
+        cwd: request.workRoot,
+        cmd: ["codex", ...roleArgs(request)],
+        env: { ...process.env },
+        timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
+        stdoutPath,
+        stderrPath: import_node_path6.default.join(scratch, "stderr.log"),
+        stdinPath: messagePath,
+        signal: own.signal
+      });
+    } finally {
+      stopWatch();
+      request.signal?.removeEventListener("abort", forward);
+    }
     try {
       let stdout = "";
       try {
-        stdout = await (0, import_promises7.readFile)(import_node_path6.default.join(scratch, "stdout.jsonl"), "utf8");
+        stdout = await (0, import_promises8.readFile)(import_node_path6.default.join(scratch, "stdout.jsonl"), "utf8");
       } catch (error) {
         return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
       }
       const events = parseEvents(stdout);
       const failure = (reason) => ({ answer: null, error: reason, usage: events.usage, timedOut: outcome.timedOut, cancelled: outcome.cancelled });
+      if (overBudget && !(events.completed && events.answer !== null)) {
+        return { ...failure(budgetMessage(limit)), budget: true, cancelled: false };
+      }
       if (outcome.cancelled) return failure("\u5DF2\u88AB\u53D6\u6D88");
       if (outcome.timedOut) return failure("\u8D85\u65F6\uFF0C\u5B50\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62");
       if (outcome.runnerError !== null) return failure(`\u65E0\u6CD5\u542F\u52A8 codex\uFF1A${outcome.runnerError}`);
       if (!events.completed) {
-        const stderr = await (0, import_promises7.readFile)(import_node_path6.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
+        const stderr = await (0, import_promises8.readFile)(import_node_path6.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
         const detail = events.failure ?? stderr.trim().split("\n").pop()?.slice(0, 300) ?? "";
         return failure(`\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u9000\u51FA\u7801 ${outcome.exitCode}${detail === "" ? "" : `\uFF1A${detail}`}\uFF09`);
       }
@@ -9151,8 +9211,20 @@ async function runRole(request) {
       outcome.dispose();
     }
   } finally {
-    await (0, import_promises7.rm)(scratch, { recursive: true, force: true });
+    await (0, import_promises8.rm)(scratch, { recursive: true, force: true });
   }
+}
+function countToolItems(stdout) {
+  let count = 0;
+  for (const line of stdout.split("\n")) {
+    if (!line.includes('"item.completed"')) continue;
+    try {
+      const type = JSON.parse(line).item?.type;
+      if (typeof type === "string" && !["agent_message", "reasoning", "error", "todo_list"].includes(type)) count += 1;
+    } catch {
+    }
+  }
+  return count;
 }
 function parseEvents(stdout) {
   const usage = [];

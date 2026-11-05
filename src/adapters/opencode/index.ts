@@ -14,7 +14,7 @@ import type { Claim } from "../../core/turnstate.js";
 import { rolePrompt, sessionSection, withGoal, type RoleName } from "../../roles/prompts.js";
 import { callRole, ROLES, toolInputSchema } from "../../roles/tools.js";
 import { patchPaths } from "../codex/patch.js";
-import { makeRunner, type SessionApi } from "./runner.js";
+import { makeRunner, type SessionApi, type StepWatch } from "./runner.js";
 import setup from "./setup.md";
 import { toTranscript } from "./transcript.js";
 
@@ -46,6 +46,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
   const models = new Map<string, string>();
   const parents = new Map<string, boolean>();
   const roleSessions = new Map<string, RoleName>();
+  const steps: StepWatch = new Map();
   const running = new Map<string, Set<AbortController>>();
   const lifetime = new AbortController();
 
@@ -148,7 +149,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
     try {
       const plan = await pausePlan({
         root, cwd: directory, project, session: event.sessionID, paths, tool: event.tool, input,
-        runner: makeRunner(ctx.session, event.sessionID, roleSessions), signal: tracked.signal,
+        runner: makeRunner(ctx.session, event.sessionID, roleSessions, steps), signal: tracked.signal,
         claim: () => claimFor(event.sessionID)("pause"),
         transcript: async () => renderTranscript(toTranscript(await ctx.session.context({ sessionID: event.sessionID }))),
       });
@@ -171,7 +172,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
         const project = await load();
         if (project === null) return;
         result = await endCheck({
-          root, project, session: sessionID, runner: makeRunner(ctx.session, sessionID, roleSessions),
+          root, project, session: sessionID, runner: makeRunner(ctx.session, sessionID, roleSessions, steps),
           signal: tracked.signal, claim: claimFor(sessionID), prompt: async () => turn.prompt,
           actions: async () => turn.actions, base: async () => turn.base,
         });
@@ -201,6 +202,8 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
           for (const controller of running.get(event.data.sessionID) ?? []) controller.abort();
         } else if (event.type === "session.step.ended") {
           const { sessionID, cost, tokens } = event.data;
+          const watch = steps.get(sessionID);
+          if (watch !== undefined && ++watch.count > watch.limit) watch.exceed();
           await recordUsage(root, {
             time: new Date().toISOString(),
             session: sessionID,
@@ -241,7 +244,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
             return {
               content: await callRole({
                 repo: root, session: context.sessionID, project,
-                runner: makeRunner(ctx.session, context.sessionID, roleSessions),
+                runner: makeRunner(ctx.session, context.sessionID, roleSessions, steps),
               }, role, input, tracked.signal),
             };
           } finally {

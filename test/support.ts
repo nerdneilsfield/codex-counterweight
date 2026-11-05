@@ -44,6 +44,8 @@ export interface Behavior {
   failure?: string;
   delayMs?: number;
   usage?: Record<string, number>;
+  tools?: number;
+  maxTurns?: boolean;
 }
 
 /** 把假 codex 装到 `bin/codex`，行为写进 `bin/script.json`。 */

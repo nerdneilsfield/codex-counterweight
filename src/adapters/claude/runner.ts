@@ -1,11 +1,12 @@
 /**
  * Claude Code 的角色子进程：`claude -p` 跑一次，正文从 stdin 文件传入，结果是一个 JSON 对象。
  * 只读靠工具白名单：普通角色 `Read,Grep`，planner 没有工具；`--strict-mcp-config` 关掉 MCP 工具；
- * 子进程里 hook 全关。`--tools` 是变长参数，所以它后面不能放位置参数，提示走 stdin。
+ * 子进程里 hook 全关；`--max-turns` 给步数上限。`--tools` 是变长参数，所以它后面不能放位置参数，提示走 stdin。
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { budgetMessage, stepLimit } from "../../core/budget.js";
 import { runProcess } from "../../core/process.js";
 import { rolePrompt } from "../../roles/prompts.js";
 import type { RoleRequest, RoleRun, RoleRunner } from "../../roles/run.js";
@@ -17,6 +18,8 @@ function roleArgs(request: Pick<RoleRequest, "role" | "model">): string[] {
     "--strict-mcp-config",
     "--system-prompt", rolePrompt(request.role),
     "--output-format", "json",
+    // claude --help 不列这个参数，但它有效：超限时以 error_max_turns 结束。
+    "--max-turns", String(stepLimit(request.role)),
     "--tools", request.role === "planner" ? "" : "Read,Grep",
   ];
 }
@@ -65,6 +68,9 @@ export const runRole: RoleRunner = async (request) => {
         costTotal: typeof result.total_cost_usd === "number" ? result.total_cost_usd : null,
       }];
       const answer = typeof result.result === "string" ? result.result : null;
+      if (result.subtype === "error_max_turns") {
+        return { ...failure(budgetMessage(stepLimit(request.role)), usage), budget: true };
+      }
       if (result.is_error === true) {
         return failure(`未正常结束（${result.subtype ?? "error"}${answer === null || answer === "" ? "" : `：${answer.slice(0, 300)}`}）`, usage);
       }

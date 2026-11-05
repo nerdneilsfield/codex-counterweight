@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // 测试用假 codex：读 stdin，按同目录的 script.json 输出 `codex exec --json` 的 JSONL。
 // script.json: { default: Behavior, byModel: { [model]: Behavior } }
-// Behavior: { answer, usage, mode: "ok" | "hang" | "noturn", delayMs }
+// Behavior: { answer, usage, mode: "ok" | "hang" | "noturn", delayMs, tools }
+// tools: 先发这么多条已完成的 command_execution item，用来数步。
 // 每次调用往 calls.jsonl 追加 { args, stdin, pid, childPid }。
 import { spawn } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -24,6 +25,9 @@ appendFileSync(path.join(dir, "calls.jsonl"),
 const emit = (event) => process.stdout.write(`${JSON.stringify(event)}\n`);
 emit({ type: "thread.started", thread_id: "t" });
 emit({ type: "item.completed", item: { id: "i0", type: "error", message: "config warning" } });
+for (let i = 0; i < (behavior.tools ?? 0); i++) {
+  emit({ type: "item.completed", item: { id: `t${i}`, type: "command_execution", command: "true", exit_code: 0 } });
+}
 if (behavior.mode === "hang") setInterval(() => {}, 1000);
 else {
   setTimeout(() => {

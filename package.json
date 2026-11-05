@@ -9,7 +9,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "bundle": "esbuild src/adapters/codex/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/hook.cjs && esbuild src/adapters/codex/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/codex-counterweight/dist/mcp.cjs && esbuild src/adapters/claude/hook.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/hook.cjs && esbuild src/adapters/claude/mcp.ts --bundle --platform=node --target=node22 --format=cjs --loader:.md=text --outfile=plugins/claude-counterweight/dist/mcp.cjs && esbuild src/adapters/opencode/index.ts --bundle --platform=node --target=node22 --format=esm --loader:.md=text --outfile=plugins/opencode-counterweight/index.js",
-    "test": "npm run bundle && vitest run"
+    "test": "npm run bundle && vitest run",
+    "check:sync": "node scripts/check-sync.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
