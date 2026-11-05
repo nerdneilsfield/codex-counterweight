@@ -186,6 +186,7 @@ async function writeChronicleEvent(input) {
 }
 
 // src/core/danger.ts
+import { homedir } from "node:os";
 function segments(command) {
   const result = [];
   let words = [];
@@ -225,8 +226,17 @@ function segments(command) {
     } else if (char === "|") {
       if (command[i + 1] === "|") i += 1;
       endSegment();
-    } else if (char === "&" && command[i + 1] === "&") {
-      i += 1;
+    } else if (char === "&") {
+      if (command[i + 1] === "&") {
+        i += 1;
+        endSegment();
+      } else if (command[i - 1] === ">" || command[i + 1] === ">") {
+        word += char;
+        started = true;
+      } else {
+        endSegment();
+      }
+    } else if (char === "(" || char === ")") {
       endSegment();
     } else if (char === " " || char === "	") {
       endWord();
@@ -238,7 +248,25 @@ function segments(command) {
   endSegment();
   return result;
 }
-var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "doas", "env", "command", "nohup", "time", "exec", "nice"]);
+var WRAPPERS = /* @__PURE__ */ new Set([
+  "sudo",
+  "doas",
+  "env",
+  "command",
+  "nohup",
+  "time",
+  "exec",
+  "nice",
+  "if",
+  "then",
+  "elif",
+  "else",
+  "while",
+  "until",
+  "do",
+  "!",
+  "{"
+]);
 var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 function commandOf(words) {
   let i = 0;
@@ -258,9 +286,11 @@ function commandOf(words) {
 function isRootOrHome(target) {
   let value = target.replace("${HOME}", "$HOME");
   if (value.endsWith("/*")) value = value.slice(0, -1);
-  value = value.replace(/\/+$/, "");
-  return value === "" ? target.startsWith("/") : value === "~" || value === "$HOME";
+  value = value.replace(/(\/\.?)+$/, "");
+  if (value === "") return target.startsWith("/");
+  return value === "~" || value === "$HOME" || value === homedir().replace(/\/+$/, "");
 }
+var HARMLESS_DEVICES = /* @__PURE__ */ new Set(["/dev/null", "/dev/zero", "/dev/stdout", "/dev/stderr"]);
 function dangerousRm(args) {
   let recursive = false;
   let force = false;
@@ -281,7 +311,7 @@ function dangerousRm(args) {
   const hit = targets.find(isRootOrHome);
   return recursive && force && hit !== void 0 ? `\u9012\u5F52\u5F3A\u5236\u5220\u9664 ${hit}` : null;
 }
-function dangerousPush(args) {
+function dangerousPush(args, branch) {
   let i = 0;
   while (i < args.length && args[i].startsWith("-")) i += args[i] === "-C" || args[i] === "-c" ? 2 : 1;
   if (args[i] !== "push") return null;
@@ -296,25 +326,34 @@ function dangerousPush(args) {
   for (const ref of refs) {
     if (ref.startsWith("+")) force = true;
   }
-  const hit = refs.map((ref) => ref.replace(/^\+/, "").split(":").pop().replace(/^refs\/heads\//, "")).find((branch) => branch === "main" || branch === "master");
+  const destinations = refs.slice(1).map((ref) => ref.replace(/^\+/, "").split(":").pop().replace(/^refs\/heads\//, ""));
+  const hit = (destinations.length === 0 ? [branch] : destinations.map((target) => target === "HEAD" ? branch : target)).find((target) => target === "main" || target === "master");
   return force && hit !== void 0 ? `\u5F3A\u5236\u63A8\u9001 ${hit}` : null;
 }
-function dangerousCommand(command) {
+function dangerousCommand(command, branch = null) {
   for (const words of segments(command)) {
     const found = commandOf(words);
     if (found === null) continue;
     const { name, args } = found;
     let reason = null;
     if (name === "rm") reason = dangerousRm(args);
-    else if (name === "git") reason = dangerousPush(args);
+    else if (name === "git") reason = dangerousPush(args, branch);
     else if (name.startsWith("mkfs")) reason = "mkfs \u4F1A\u91CD\u5199\u6574\u4E2A\u8BBE\u5907";
     else if (name === "dd") {
       const target = args.find((arg) => arg.startsWith("of=/dev/"));
-      if (target !== void 0 && target !== "of=/dev/null") reason = `dd \u5199\u5165\u8BBE\u5907 ${target.slice(3)}`;
+      if (target !== void 0 && !HARMLESS_DEVICES.has(target.slice(3))) reason = `dd \u5199\u5165\u8BBE\u5907 ${target.slice(3)}`;
     }
     if (reason !== null) return `[counterweight] \u62D2\u7EDD\u9AD8\u5371\u547D\u4EE4\uFF1A${reason}\u3002\u5982\u786E\u9700\u6267\u884C\uFF0C\u8BF7\u7531\u7528\u6237\u624B\u52A8\u8FD0\u884C\u3002`;
   }
   return null;
+}
+async function dangerousCommandIn(repo, command) {
+  let branch = null;
+  if (/\bpush\b/.test(command)) {
+    const result = await git(repo, ["symbolic-ref", "--short", "-q", "HEAD"]).catch(() => null);
+    if (result !== null && result.code === 0) branch = result.stdout.trim();
+  }
+  return dangerousCommand(command, branch);
 }
 
 // src/core/config.ts
@@ -10038,7 +10077,7 @@ async function setupPlugin(ctx) {
   await ctx.tool.hook("execute.before", async (event) => {
     if (event.tool === "shell") {
       const command = event.input?.command;
-      const danger = typeof command === "string" ? dangerousCommand(command) : null;
+      const danger = typeof command === "string" ? await dangerousCommandIn(directory, command) : null;
       if (danger !== null) throw new Error(danger);
       if (typeof command === "string" && command !== "" && !await isChild(event.sessionID)) {
         turnOf(event.sessionID).actions.push({ tool: "bash", detail: command });

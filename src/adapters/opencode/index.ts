@@ -4,7 +4,7 @@
  */
 import { snapshotTree, type ActionRecord } from "../../core/auto.js";
 import { writeChronicleEvent, type ChronicleInput } from "../../core/chronicle-event.js";
-import { dangerousCommand } from "../../core/danger.js";
+import { dangerousCommandIn } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, pausePlan } from "../../core/flow.js";
 import { readGoal } from "../../core/goal.js";
@@ -133,7 +133,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
     // 根会话的 shell 命令只记录，不过保护和 PAUSE；高危命令不用配置也拒绝。
     if (event.tool === "shell") {
       const command = (event.input as Record<string, unknown> | undefined)?.command;
-      const danger = typeof command === "string" ? dangerousCommand(command) : null;
+      const danger = typeof command === "string" ? await dangerousCommandIn(directory, command) : null;
       if (danger !== null) throw new Error(danger);
       if (typeof command === "string" && command !== "" && !(await isChild(event.sessionID))) {
         turnOf(event.sessionID).actions.push({ tool: "bash", detail: command });
