@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -87,10 +87,16 @@ function fakeCtx(directory: string, script: { answers?: Record<string, string>; 
 }
 
 let repo: string;
+let home: string;
+let savedHome: string | undefined;
 let cleanup: (() => void) | void;
 const model = (providerID: string, id: string) => ({ providerID, id });
 
 beforeEach(async () => {
+  // chronicle 写到 HOME 下；测试绝不碰真的 ~/.agents。
+  home = await mkdtemp(path.join(tmpdir(), "cw-opencode-home-"));
+  savedHome = process.env.HOME;
+  process.env.HOME = home;
   repo = await mkdtemp(path.join(tmpdir(), "cw-opencode-"));
   execFileSync("git", ["init", "-q"], { cwd: repo });
   await writeFile(path.join(repo, "a.txt"), "1\n");
@@ -102,6 +108,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   cleanup?.();
+  process.env.HOME = savedHome;
+  await rm(home, { recursive: true, force: true });
   await rm(repo, { recursive: true, force: true });
 });
 
@@ -513,5 +521,44 @@ describe("inject event", () => {
     const fake = await start();
     await fake.fire("context", { sessionID: "root", model: model("prov", "m"), system: [] });
     expect((await meterLines()).find((line) => line.event === "inject").detail).toMatchObject({ goal: false, check: false });
+  });
+});
+
+describe("chronicle event", () => {
+  const events = async () => {
+    const root = path.join(home, ".agents", "chronicle", "events");
+    const out = [];
+    for (const machine of await readdir(root).catch(() => [] as string[])) {
+      for (const name of await readdir(path.join(root, machine))) {
+        out.push(JSON.parse(await readFile(path.join(root, machine, name), "utf8")));
+      }
+    }
+    return out;
+  };
+  const idle = (fake: Awaited<ReturnType<typeof start>>) => fake.fire("experimental.idle", { sessionID: "root", background: [] });
+
+  it("writes nothing without the directory, then one event per settled turn, none for a repair continuation", async () => {
+    await project('version = 1\n[check]\ncmd = ["sh", "-c", "exit 3"]\n');
+    const fake = await start();
+    const turn = async () => {
+      await fake.fire("prompt", { sessionID: "root", prompt: { text: "p" } });
+      await idle(fake);
+      await idle(fake);
+    };
+    await turn();
+    await expect(stat(path.join(home, ".agents"))).rejects.toThrow();
+    await mkdir(path.join(home, ".agents", "chronicle"), { recursive: true });
+    await fake.fire("prompt", { sessionID: "root", prompt: { text: "p" } });
+    await idle(fake);
+    expect(await events()).toEqual([]);
+    await idle(fake);
+    expect(await events()).toMatchObject([{ outcome: "failed", agent: "opencode:root", turn: null }]);
+  });
+
+  it("records unknown when there is no project.toml", async () => {
+    await mkdir(path.join(home, ".agents", "chronicle"), { recursive: true });
+    const fake = await start();
+    await idle(fake);
+    expect(await events()).toMatchObject([{ outcome: "unknown" }]);
   });
 });

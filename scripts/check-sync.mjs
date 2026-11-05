@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SHARED = ["budget.ts", "danger.ts", "scope.ts"];
+const SHARED = ["budget.ts", "danger.ts", "scope.ts", "chronicle-event.ts"];
 
 const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const other = path.resolve(here, "..", "pi-counterweight");

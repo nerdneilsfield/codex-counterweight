@@ -19,6 +19,8 @@ export function childEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
     PATH: `${sandbox.bin}${path.delimiter}${process.env.PATH ?? ""}`,
     PLUGIN_DATA: sandbox.data,
     PLUGIN_ROOT,
+    // 钩子进程写 chronicle 时用的 HOME；测试绝不碰真的 ~/.agents。
+    HOME: sandbox.data,
   };
 }
 
@@ -68,6 +70,7 @@ export function claudeEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
     PATH: `${sandbox.bin}${path.delimiter}${process.env.PATH ?? ""}`,
     CLAUDE_PLUGIN_DATA: sandbox.data,
     CLAUDE_PLUGIN_ROOT,
+    HOME: sandbox.data,
   };
 }
 

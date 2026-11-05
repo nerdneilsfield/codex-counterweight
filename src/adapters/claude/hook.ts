@@ -5,6 +5,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { snapshotTree } from "../../core/auto.js";
+import { writeChronicleEvent } from "../../core/chronicle-event.js";
 import { dangerousCommand } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, missingCheckNotice, pausePlan } from "../../core/flow.js";
@@ -169,15 +170,22 @@ async function preToolUse(root: string, cwd: string, input: HookInput): Promise<
 }
 
 async function stop(root: string, input: HookInput): Promise<Output> {
+  const session = input.session_id ?? "";
+  const turn = input.prompt_id ?? "";
+  // 回合真正结束（不是续跑）时记一条 chronicle 事件。Claude Code 按 Esc 不触发 Stop，所以取消的回合没有事件。
+  const chronicle = (settled: { outcome: "ok" | "failed" | "cancelled" | "unknown"; evidence: { text: string } | { gap: string } }) =>
+    writeChronicleEvent({ host: "claude", session, turn, workspace: root, ...settled });
   let project: ProjectConfig | null;
   try {
     project = await loadProjectConfig(root, "claude.toml");
   } catch (error) {
+    await chronicle({ outcome: "unknown", evidence: { gap: `配置非法，未运行检查：${message(error)}` } });
     return { systemMessage: `[counterweight] 配置非法，未运行检查：${message(error)}` };
   }
-  if (project === null) return null;
-  const session = input.session_id ?? "";
-  const turn = input.prompt_id ?? "";
+  if (project === null) {
+    await chronicle({ outcome: "unknown", evidence: { gap: "没有 .cw/project.toml，未运行检查" } });
+    return null;
+  }
   const result = await endCheck({
     root, project, session, runner: runRole, signal: new AbortController().signal,
     claim: (name) => claim(session, turn, name),
@@ -188,6 +196,7 @@ async function stop(root: string, input: HookInput): Promise<Output> {
   if (result.continueWith !== null) {
     return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? undefined };
   }
+  await chronicle(result.settled);
   return result.report === null ? null : { systemMessage: result.report };
 }
 

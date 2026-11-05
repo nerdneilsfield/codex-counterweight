@@ -121,6 +121,70 @@ async function changedFiles(repo, base) {
   return out === null ? [] : out.split("\0").filter((name) => name !== "");
 }
 
+// src/core/chronicle-event.ts
+import { randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path2 from "node:path";
+var EVIDENCE_CAP = 2e3;
+function parseProjects(text2) {
+  const projects = /* @__PURE__ */ new Map();
+  for (const line of text2.split("\n")) {
+    const match = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s#'"][^#]*?))\s*:\s*(?:"([^"]*)"|'([^']*)'|([^\s#'"]\S*))\s*(?:#.*)?$/.exec(line);
+    if (match === null) continue;
+    const key = match[1] ?? match[2] ?? match[3];
+    const id = match[4] ?? match[5] ?? match[6];
+    if (!path2.isAbsolute(key)) continue;
+    projects.set(path2.resolve(key), id === "" || id === "null" || id === "~" ? null : id);
+  }
+  return projects;
+}
+async function projectOf(dir, workspace) {
+  try {
+    return parseProjects(await readFile(path2.join(dir, "projects.yaml"), "utf8")).get(path2.resolve(workspace)) ?? null;
+  } catch {
+    return null;
+  }
+}
+async function writeJson(dir, id, value) {
+  await mkdir(dir, { recursive: true });
+  const target = path2.join(dir, `${id}.json`);
+  const temp = `${target}.tmp`;
+  await writeFile(temp, `${JSON.stringify(value, null, 2)}
+`, { flag: "wx" });
+  await rename(temp, target);
+}
+async function writeChronicleEvent(input) {
+  try {
+    const root = path2.join(os.homedir(), ".agents", "chronicle");
+    if (!(await stat(root)).isDirectory()) return;
+    const hostname = os.hostname();
+    const machine = hostname.replace(/[^A-Za-z0-9._-]/g, "_") || "unknown";
+    const time = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const eventId = randomUUID();
+    const evidence = "text" in input.evidence ? { text: input.evidence.text.slice(0, EVIDENCE_CAP) } : { gap: input.evidence.gap };
+    const evidenceId = randomUUID();
+    await writeJson(path2.join(root, "evidence", machine), evidenceId, {
+      id: evidenceId,
+      event: eventId,
+      time,
+      source: `counterweight:${input.host}`,
+      ...evidence
+    });
+    await writeJson(path2.join(root, "events", machine), eventId, {
+      id: eventId,
+      time,
+      machine: hostname,
+      agent: `${input.host}:${input.session}`,
+      workspace: input.workspace,
+      outcome: input.outcome,
+      project: await projectOf(root, input.workspace),
+      turn: input.turn === "" ? null : input.turn
+    });
+  } catch {
+  }
+}
+
 // src/core/danger.ts
 function segments(command) {
   const result = [];
@@ -254,8 +318,8 @@ function dangerousCommand(command) {
 }
 
 // src/core/config.ts
-import { readFile } from "node:fs/promises";
-import path3 from "node:path";
+import { readFile as readFile2 } from "node:fs/promises";
+import path4 from "node:path";
 
 // node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string2, ptr) {
@@ -1017,9 +1081,9 @@ var HAS_WELLFORMED = !!"".isWellFormed;
 
 // src/core/paths.ts
 import { lstat, realpath } from "node:fs/promises";
-import path2 from "node:path";
+import path3 from "node:path";
 function relativeParts(value) {
-  if (value === "" || path2.isAbsolute(value) || path2.win32.isAbsolute(value)) {
+  if (value === "" || path3.isAbsolute(value) || path3.win32.isAbsolute(value)) {
     throw new Error(`path: must be repo-relative ${value}`);
   }
   const parts = value.split("/");
@@ -1029,12 +1093,12 @@ function relativeParts(value) {
   return parts;
 }
 function pathInside(root, candidate) {
-  const relative = path2.relative(root, candidate);
-  return relative === "" || !relative.startsWith("..") && !path2.isAbsolute(relative);
+  const relative = path3.relative(root, candidate);
+  return relative === "" || !relative.startsWith("..") && !path3.isAbsolute(relative);
 }
 async function resolveWriteTarget(root, relative) {
   const parts = relativeParts(relative);
-  const absolute = path2.join(root, ...parts);
+  const absolute = path3.join(root, ...parts);
   let leaf;
   try {
     leaf = await lstat(absolute);
@@ -1054,15 +1118,15 @@ async function resolveWriteTarget(root, relative) {
     return await containedRelative(root, absolute, relative);
   }
   for (let length = parts.length - 1; length >= 1; length -= 1) {
-    const ancestor = path2.join(root, ...parts.slice(0, length));
-    let stat;
+    const ancestor = path3.join(root, ...parts.slice(0, length));
+    let stat2;
     try {
-      stat = await lstat(ancestor);
+      stat2 = await lstat(ancestor);
     } catch (error) {
       if (isNotFound(error)) continue;
       throw error;
     }
-    if (stat.isSymbolicLink() || stat.isDirectory()) {
+    if (stat2.isSymbolicLink() || stat2.isDirectory()) {
       const realAncestor = await containedRelative(root, ancestor, relative);
       const rest = parts.slice(length);
       return realAncestor === "" ? rest.join("/") : [realAncestor, ...rest].join("/");
@@ -1074,8 +1138,8 @@ async function resolveWriteTarget(root, relative) {
 async function containedRelative(root, candidate, label) {
   const target = await realpath(candidate);
   if (!pathInside(root, target)) throw new Error(`path: symlink escapes repository ${label}`);
-  const relative = path2.relative(root, target);
-  return relative === "" ? "" : relative.split(path2.sep).join("/");
+  const relative = path3.relative(root, target);
+  return relative === "" ? "" : relative.split(path3.sep).join("/");
 }
 async function realpathOr(value) {
   try {
@@ -8134,23 +8198,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path12, value) {
-  return { type: "update", path: path12, value };
+function CreateUpdate(path13, value) {
+  return { type: "update", path: path13, value };
 }
-function CreateInsert(path12, value) {
-  return { type: "insert", path: path12, value };
+function CreateInsert(path13, value) {
+  return { type: "insert", path: path13, value };
 }
-function CreateDelete(path12) {
-  return { type: "delete", path: path12 };
+function CreateDelete(path13) {
+  return { type: "delete", path: path13 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path12, left, right) {
+function* FromObject17(path13, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path12, right);
+    return yield CreateUpdate(path13, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -8160,7 +8224,7 @@ function* FromObject17(path12, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path12}/${key}`, right[key]);
+    yield CreateInsert(`${path13}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -8169,52 +8233,52 @@ function* FromObject17(path12, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path12}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path13}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path12}/${key}`);
+    yield CreateDelete(`${path13}/${key}`);
   }
 }
-function* FromArray13(path12, left, right) {
+function* FromArray13(path13, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path12, right);
+    return yield CreateUpdate(path13, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path12}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path13}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path12}/${i}`, right[i]);
+    yield CreateInsert(`${path13}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path12}/${i}`);
+    yield CreateDelete(`${path13}/${i}`);
   }
 }
-function* FromTypedArray2(path12, left, right) {
+function* FromTypedArray2(path13, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path12}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path13}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path12, right);
+    return yield CreateUpdate(path13, right);
   }
 }
-function* FromUnknown(path12, left, right) {
+function* FromUnknown(path13, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path12, right);
+  yield CreateUpdate(path13, right);
 }
-function* FromValue4(path12, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path12, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path12, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path12, left, right) : yield* FromUnknown(path12, left, right);
+function* FromValue4(path13, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path13, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path13, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path13, left, right) : yield* FromUnknown(path13, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8648,7 +8712,7 @@ async function loadProjectConfig(repo, hostFile) {
 }
 async function readOptional(repo, name) {
   try {
-    return await readFile(path3.join(repo, ".cw", name), "utf8");
+    return await readFile2(path4.join(repo, ".cw", name), "utf8");
   } catch (error) {
     if (isNotFound(error)) return null;
     throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
@@ -8727,12 +8791,12 @@ function normalizeProtectedPath(value) {
 }
 
 // src/core/flow.ts
-import path10 from "node:path";
+import path11 from "node:path";
 
 // src/core/check.ts
 import { mkdtemp as mkdtemp2, open as open2, rm as rm2 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
-import path4 from "node:path";
+import path5 from "node:path";
 
 // src/core/process.ts
 import { spawn as spawn2 } from "node:child_process";
@@ -8912,9 +8976,9 @@ function delay(ms) {
 var TAIL_LINES = 80;
 var TAIL_BYTES = 16 * 1024;
 async function runEndCheck(request) {
-  const directory = await mkdtemp2(path4.join(tmpdir2(), "cw-check-"));
-  const stdoutPath = path4.join(directory, "stdout.log");
-  const stderrPath = path4.join(directory, "stderr.log");
+  const directory = await mkdtemp2(path5.join(tmpdir2(), "cw-check-"));
+  const stdoutPath = path5.join(directory, "stdout.log");
+  const stderrPath = path5.join(directory, "stderr.log");
   const started = Date.now();
   let run = null;
   try {
@@ -8999,17 +9063,17 @@ async function readTail(file) {
 
 // src/core/meter.ts
 import { constants } from "node:fs";
-import { lstat as lstat2, mkdir, open as open3 } from "node:fs/promises";
-import path5 from "node:path";
+import { lstat as lstat2, mkdir as mkdir2, open as open3 } from "node:fs/promises";
+import path6 from "node:path";
 var APPEND_FLAGS = constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW;
 async function appendMeterLine(repo, record) {
-  const dir = path5.join(repo, ".cw");
-  await mkdir(dir, { recursive: true });
-  const stat = await lstat2(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+  const dir = path6.join(repo, ".cw");
+  await mkdir2(dir, { recursive: true });
+  const stat2 = await lstat2(dir);
+  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165\u8BA1\u91CF");
   }
-  const handle = await open3(path5.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
+  const handle = await open3(path6.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
   try {
     await handle.writeFile(`${JSON.stringify(record)}
 `);
@@ -9121,16 +9185,16 @@ ${plan}`;
 }
 
 // src/core/protect.ts
-import path7 from "node:path";
+import path8 from "node:path";
 
 // src/core/scope.ts
-import { readFile as readFile2 } from "node:fs/promises";
-import path6 from "node:path";
+import { readFile as readFile3 } from "node:fs/promises";
+import path7 from "node:path";
 var SCOPE_FILE = ".cw/scope.txt";
 async function readScope(repo) {
   let text2;
   try {
-    text2 = await readFile2(path6.join(repo, SCOPE_FILE), "utf8");
+    text2 = await readFile3(path7.join(repo, SCOPE_FILE), "utf8");
   } catch {
     return null;
   }
@@ -9138,7 +9202,7 @@ async function readScope(repo) {
   return prefixes.length === 0 ? null : prefixes;
 }
 function inScope(relative, prefixes) {
-  const normalized = relative.split(path6.sep).join("/");
+  const normalized = relative.split(path7.sep).join("/");
   if (normalized === ".cw" || normalized.startsWith(".cw/")) return true;
   return prefixes.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
 }
@@ -9148,29 +9212,29 @@ var scopeReason = (target) => `[counterweight] ${target} \u5728 ${SCOPE_FILE} \u
 var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
 var GOAL_FILE = ".cw/goal.md";
 function isProtected(relative, patterns) {
-  const normalized = relative.split(path7.sep).join("/");
+  const normalized = relative.split(path8.sep).join("/");
   if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE || normalized === SCOPE_FILE) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
 // src/roles/tools.ts
-import { readFile as readFile3 } from "node:fs/promises";
-import path9 from "node:path";
+import { readFile as readFile4 } from "node:fs/promises";
+import path10 from "node:path";
 
 // src/core/cwfile.ts
-import { lstat as lstat3, mkdir as mkdir2, rename, writeFile } from "node:fs/promises";
-import path8 from "node:path";
+import { lstat as lstat3, mkdir as mkdir3, rename as rename2, writeFile as writeFile2 } from "node:fs/promises";
+import path9 from "node:path";
 async function writeCwFile(repo, name, content) {
-  const dir = path8.join(repo, ".cw");
-  await mkdir2(dir, { recursive: true });
-  const stat = await lstat3(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+  const dir = path9.join(repo, ".cw");
+  await mkdir3(dir, { recursive: true });
+  const stat2 = await lstat3(dir);
+  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
   }
-  const target = path8.join(dir, name);
+  const target = path9.join(dir, name);
   const temp = `${target}.${process.pid}.tmp`;
-  await writeFile(temp, content);
-  await rename(temp, target);
+  await writeFile2(temp, content);
+  await rename2(temp, target);
   return target;
 }
 
@@ -9382,7 +9446,7 @@ ${run.answer}`
 }
 async function readHistory(repo) {
   try {
-    return await readFile3(path9.join(repo, ".cw", HISTORY_FILE), "utf8");
+    return await readFile4(path10.join(repo, ".cw", HISTORY_FILE), "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -9457,9 +9521,9 @@ async function checkProtectedTarget(root, cwd, patterns, raw) {
   return null;
 }
 function toRepoRelative(repoRoot, cwd, value) {
-  const relative = path10.relative(repoRoot, path10.resolve(cwd, value));
-  if (relative === "" || relative.startsWith("..") || path10.isAbsolute(relative)) return null;
-  return relative.split(path10.sep).join("/");
+  const relative = path11.relative(repoRoot, path11.resolve(cwd, value));
+  if (relative === "" || relative.startsWith("..") || path11.isAbsolute(relative)) return null;
+  return relative.split(path11.sep).join("/");
 }
 async function checkGoalPaths(root, cwd, paths) {
   try {
@@ -9503,11 +9567,13 @@ async function checkScopePaths(root, cwd, paths) {
     return `[counterweight] \u8303\u56F4\u68C0\u67E5\u51FA\u9519\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${message(error)}`;
   }
 }
+var NO_CHECK = { outcome: "unknown", evidence: { gap: "\u6CA1\u6709\u914D\u7F6E\u7ED3\u675F\u68C0\u67E5" } };
 async function endCheck(params) {
   const { root, project, session, signal } = params;
   const texts = [];
   let checkReport = null;
   let attention = false;
+  let settled = NO_CHECK;
   if (project.check !== null) {
     try {
       const check = project.check;
@@ -9523,7 +9589,7 @@ async function endCheck(params) {
           outcome: "cancelled"
         }).catch(() => {
         });
-        return { continueWith: null, report: null, attention: false };
+        return { continueWith: null, report: null, attention: false, settled: { outcome: "cancelled", evidence: { gap: "\u7ED3\u675F\u68C0\u67E5\u88AB\u53D6\u6D88" } } };
       }
       const passed = checkPassed(outcome);
       const retry = !passed && await params.claim("repair");
@@ -9540,12 +9606,14 @@ async function endCheck(params) {
         outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported"
       }).catch(() => {
       });
-      if (retry) return { continueWith: report, report: null, attention: false };
+      if (retry) return { continueWith: report, report: null, attention: false, settled: NO_CHECK };
       checkReport = report;
       attention = !passed;
+      settled = { outcome: passed ? "ok" : "failed", evidence: { text: report } };
     } catch (error) {
       checkReport = `[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u5B8C\u6210\uFF0C\u672C\u8F6E\u6CA1\u6709\u5F97\u5230\u68C0\u67E5\u7ED3\u8BBA\uFF1A${message(error)}`;
       attention = true;
+      settled = { outcome: "unknown", evidence: { gap: checkReport } };
     }
     texts.push(checkReport);
   }
@@ -9554,12 +9622,12 @@ async function endCheck(params) {
     texts.push(auto.failure);
     attention = true;
   }
-  if (auto.findings !== null) return { continueWith: auto.findings, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
+  if (auto.findings !== null) return { continueWith: auto.findings, report: texts.length === 0 ? null : texts.join("\n\n"), attention, settled };
   if (auto.text !== null) {
     texts.push(auto.text);
     attention = true;
   }
-  return { continueWith: null, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
+  return { continueWith: null, report: texts.length === 0 ? null : texts.join("\n\n"), attention, settled };
 }
 async function runAuto(params, checkLine) {
   const none = { text: null, findings: null, failure: null };
@@ -9647,8 +9715,8 @@ async function pausePlan(params) {
 }
 
 // src/core/goal.ts
-import { readFile as readFile4 } from "node:fs/promises";
-import path11 from "node:path";
+import { readFile as readFile5 } from "node:fs/promises";
+import path12 from "node:path";
 
 // src/roles/explorer.md
 var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
@@ -9729,7 +9797,7 @@ Stop when the current question is answered. Do not ask whether to continue.`;
 async function readGoal(repo) {
   if (repo === null) return null;
   try {
-    return await readFile4(path11.join(repo, GOAL_FILE), "utf8");
+    return await readFile5(path12.join(repo, GOAL_FILE), "utf8");
   } catch {
     return null;
   }
@@ -10021,10 +10089,14 @@ async function setupPlugin(ctx) {
       if (await isChild(sessionID)) return;
       const turn = turnOf(sessionID);
       if (turn.relayed) return;
+      const chronicle2 = (settled) => writeChronicleEvent({ host: "opencode", session: sessionID, turn: null, workspace: root, ...settled });
       let result;
       try {
         const project = await load();
-        if (project === null) return;
+        if (project === null) {
+          await chronicle2({ outcome: "unknown", evidence: { gap: "\u6CA1\u6709 .cw/project.toml\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5" } });
+          return;
+        }
         result = await endCheck({
           root,
           project,
@@ -10037,12 +10109,19 @@ async function setupPlugin(ctx) {
           base: async () => turn.base
         });
       } catch (error) {
-        result = { continueWith: null, report: `[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message2(error)}`, attention: true };
+        const report = `[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message2(error)}`;
+        result = { continueWith: null, report, attention: true, settled: { outcome: "unknown", evidence: { gap: report } } };
       }
-      if (tracked.signal.aborted) return;
+      if (tracked.signal.aborted) {
+        await chronicle2({ outcome: "cancelled", evidence: { gap: "\u56DE\u5408\u88AB\u4E2D\u65AD" } });
+        return;
+      }
       if (result.continueWith !== null) {
         await ctx.session.synthetic({ sessionID, text: result.continueWith });
-      } else if (result.attention && result.report !== null) {
+        return;
+      }
+      await chronicle2(result.settled);
+      if (result.attention && result.report !== null) {
         turn.relayed = true;
         await ctx.session.synthetic({ sessionID, text: RELAY(result.report) });
       }

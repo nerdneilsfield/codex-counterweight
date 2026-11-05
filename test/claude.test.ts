@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { appendFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -344,5 +344,29 @@ describe("inject event", () => {
     await hook({ hook_event_name: "SessionStart", source: "startup" });
     const [event] = (await meterLines()).filter((line) => line.event === "inject");
     expect(event.detail).toEqual({ host: "claude", version: manifest.version, goal: true, check: true });
+  });
+});
+
+describe("chronicle event", () => {
+  const chronicle = () => path.join(sandbox.data, ".agents", "chronicle");
+  const events = async () => {
+    const root = path.join(chronicle(), "events");
+    const out = [];
+    for (const machine of await readdir(root).catch(() => [] as string[])) {
+      for (const name of await readdir(path.join(root, machine))) {
+        out.push(JSON.parse(await readFile(path.join(root, machine, name), "utf8")));
+      }
+    }
+    return out;
+  };
+
+  it("records the final settle with the prompt id as the turn, and nothing without the directory", async () => {
+    await project('version = 1\n[check]\ncmd = ["sh", "-c", "exit 3"]\n');
+    await hook({ hook_event_name: "Stop" });
+    await expect(stat(path.join(sandbox.data, ".agents"))).rejects.toThrow();
+    await mkdir(chronicle(), { recursive: true });
+    expect((await hook({ hook_event_name: "Stop" })).out.decision).toBeUndefined();
+    const [event] = await events();
+    expect(event).toMatchObject({ outcome: "failed", agent: "claude:s1", turn: "p1" });
   });
 });

@@ -27,8 +27,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/adapters/codex/hook.ts
-var import_promises14 = require("node:fs/promises");
-var import_node_path14 = __toESM(require("node:path"), 1);
+var import_promises15 = require("node:fs/promises");
+var import_node_path15 = __toESM(require("node:path"), 1);
 
 // src/core/auto.ts
 var import_promises = require("node:fs/promises");
@@ -145,6 +145,70 @@ async function changedFiles(repo, base) {
   const end = await snapshotTree(repo);
   const out = await gitOut(repo, ["-c", "core.quotePath=false", "diff", "--name-only", "-z", ...diffRange(base, end), "--", ".", ":!.cw"]);
   return out === null ? [] : out.split("\0").filter((name) => name !== "");
+}
+
+// src/core/chronicle-event.ts
+var import_node_crypto = require("node:crypto");
+var import_promises2 = require("node:fs/promises");
+var import_node_os2 = __toESM(require("node:os"), 1);
+var import_node_path2 = __toESM(require("node:path"), 1);
+var EVIDENCE_CAP = 2e3;
+function parseProjects(text2) {
+  const projects = /* @__PURE__ */ new Map();
+  for (const line of text2.split("\n")) {
+    const match = /^\s*(?:"([^"]+)"|'([^']+)'|([^\s#'"][^#]*?))\s*:\s*(?:"([^"]*)"|'([^']*)'|([^\s#'"]\S*))\s*(?:#.*)?$/.exec(line);
+    if (match === null) continue;
+    const key = match[1] ?? match[2] ?? match[3];
+    const id = match[4] ?? match[5] ?? match[6];
+    if (!import_node_path2.default.isAbsolute(key)) continue;
+    projects.set(import_node_path2.default.resolve(key), id === "" || id === "null" || id === "~" ? null : id);
+  }
+  return projects;
+}
+async function projectOf(dir, workspace) {
+  try {
+    return parseProjects(await (0, import_promises2.readFile)(import_node_path2.default.join(dir, "projects.yaml"), "utf8")).get(import_node_path2.default.resolve(workspace)) ?? null;
+  } catch {
+    return null;
+  }
+}
+async function writeJson(dir, id, value) {
+  await (0, import_promises2.mkdir)(dir, { recursive: true });
+  const target = import_node_path2.default.join(dir, `${id}.json`);
+  const temp = `${target}.tmp`;
+  await (0, import_promises2.writeFile)(temp, `${JSON.stringify(value, null, 2)}
+`, { flag: "wx" });
+  await (0, import_promises2.rename)(temp, target);
+}
+async function writeChronicleEvent(input) {
+  try {
+    const root = import_node_path2.default.join(import_node_os2.default.homedir(), ".agents", "chronicle");
+    if (!(await (0, import_promises2.stat)(root)).isDirectory()) return;
+    const hostname = import_node_os2.default.hostname();
+    const machine = hostname.replace(/[^A-Za-z0-9._-]/g, "_") || "unknown";
+    const time = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const eventId = (0, import_node_crypto.randomUUID)();
+    const evidence = "text" in input.evidence ? { text: input.evidence.text.slice(0, EVIDENCE_CAP) } : { gap: input.evidence.gap };
+    const evidenceId = (0, import_node_crypto.randomUUID)();
+    await writeJson(import_node_path2.default.join(root, "evidence", machine), evidenceId, {
+      id: evidenceId,
+      event: eventId,
+      time,
+      source: `counterweight:${input.host}`,
+      ...evidence
+    });
+    await writeJson(import_node_path2.default.join(root, "events", machine), eventId, {
+      id: eventId,
+      time,
+      machine: hostname,
+      agent: `${input.host}:${input.session}`,
+      workspace: input.workspace,
+      outcome: input.outcome,
+      project: await projectOf(root, input.workspace),
+      turn: input.turn === "" ? null : input.turn
+    });
+  } catch {
+  }
 }
 
 // src/core/danger.ts
@@ -280,8 +344,8 @@ function dangerousCommand(command) {
 }
 
 // src/core/config.ts
-var import_promises3 = require("node:fs/promises");
-var import_node_path3 = __toESM(require("node:path"), 1);
+var import_promises4 = require("node:fs/promises");
+var import_node_path4 = __toESM(require("node:path"), 1);
 
 // node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string, ptr) {
@@ -1042,10 +1106,10 @@ function parse(toml, options = {}) {
 var HAS_WELLFORMED = !!"".isWellFormed;
 
 // src/core/paths.ts
-var import_promises2 = require("node:fs/promises");
-var import_node_path2 = __toESM(require("node:path"), 1);
+var import_promises3 = require("node:fs/promises");
+var import_node_path3 = __toESM(require("node:path"), 1);
 function relativeParts(value) {
-  if (value === "" || import_node_path2.default.isAbsolute(value) || import_node_path2.default.win32.isAbsolute(value)) {
+  if (value === "" || import_node_path3.default.isAbsolute(value) || import_node_path3.default.win32.isAbsolute(value)) {
     throw new Error(`path: must be repo-relative ${value}`);
   }
   const parts = value.split("/");
@@ -1055,15 +1119,15 @@ function relativeParts(value) {
   return parts;
 }
 function pathInside(root, candidate) {
-  const relative = import_node_path2.default.relative(root, candidate);
-  return relative === "" || !relative.startsWith("..") && !import_node_path2.default.isAbsolute(relative);
+  const relative = import_node_path3.default.relative(root, candidate);
+  return relative === "" || !relative.startsWith("..") && !import_node_path3.default.isAbsolute(relative);
 }
 async function resolveWriteTarget(root, relative) {
   const parts = relativeParts(relative);
-  const absolute = import_node_path2.default.join(root, ...parts);
+  const absolute = import_node_path3.default.join(root, ...parts);
   let leaf;
   try {
-    leaf = await (0, import_promises2.lstat)(absolute);
+    leaf = await (0, import_promises3.lstat)(absolute);
   } catch (error) {
     if (!isNotFound(error)) throw error;
     leaf = null;
@@ -1080,15 +1144,15 @@ async function resolveWriteTarget(root, relative) {
     return await containedRelative(root, absolute, relative);
   }
   for (let length = parts.length - 1; length >= 1; length -= 1) {
-    const ancestor = import_node_path2.default.join(root, ...parts.slice(0, length));
-    let stat;
+    const ancestor = import_node_path3.default.join(root, ...parts.slice(0, length));
+    let stat2;
     try {
-      stat = await (0, import_promises2.lstat)(ancestor);
+      stat2 = await (0, import_promises3.lstat)(ancestor);
     } catch (error) {
       if (isNotFound(error)) continue;
       throw error;
     }
-    if (stat.isSymbolicLink() || stat.isDirectory()) {
+    if (stat2.isSymbolicLink() || stat2.isDirectory()) {
       const realAncestor = await containedRelative(root, ancestor, relative);
       const rest = parts.slice(length);
       return realAncestor === "" ? rest.join("/") : [realAncestor, ...rest].join("/");
@@ -1098,14 +1162,14 @@ async function resolveWriteTarget(root, relative) {
   return relative;
 }
 async function containedRelative(root, candidate, label) {
-  const target = await (0, import_promises2.realpath)(candidate);
+  const target = await (0, import_promises3.realpath)(candidate);
   if (!pathInside(root, target)) throw new Error(`path: symlink escapes repository ${label}`);
-  const relative = import_node_path2.default.relative(root, target);
-  return relative === "" ? "" : relative.split(import_node_path2.default.sep).join("/");
+  const relative = import_node_path3.default.relative(root, target);
+  return relative === "" ? "" : relative.split(import_node_path3.default.sep).join("/");
 }
 async function realpathOr(value) {
   try {
-    return await (0, import_promises2.realpath)(value);
+    return await (0, import_promises3.realpath)(value);
   } catch {
     return value;
   }
@@ -8160,23 +8224,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path15, value) {
-  return { type: "update", path: path15, value };
+function CreateUpdate(path16, value) {
+  return { type: "update", path: path16, value };
 }
-function CreateInsert(path15, value) {
-  return { type: "insert", path: path15, value };
+function CreateInsert(path16, value) {
+  return { type: "insert", path: path16, value };
 }
-function CreateDelete(path15) {
-  return { type: "delete", path: path15 };
+function CreateDelete(path16) {
+  return { type: "delete", path: path16 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path15, left, right) {
+function* FromObject17(path16, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path15, right);
+    return yield CreateUpdate(path16, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -8186,7 +8250,7 @@ function* FromObject17(path15, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path15}/${key}`, right[key]);
+    yield CreateInsert(`${path16}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -8195,52 +8259,52 @@ function* FromObject17(path15, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path15}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path16}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path15}/${key}`);
+    yield CreateDelete(`${path16}/${key}`);
   }
 }
-function* FromArray13(path15, left, right) {
+function* FromArray13(path16, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path15, right);
+    return yield CreateUpdate(path16, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path15}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path16}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path15}/${i}`, right[i]);
+    yield CreateInsert(`${path16}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path15}/${i}`);
+    yield CreateDelete(`${path16}/${i}`);
   }
 }
-function* FromTypedArray2(path15, left, right) {
+function* FromTypedArray2(path16, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path15}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path16}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path15, right);
+    return yield CreateUpdate(path16, right);
   }
 }
-function* FromUnknown(path15, left, right) {
+function* FromUnknown(path16, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path15, right);
+  yield CreateUpdate(path16, right);
 }
-function* FromValue4(path15, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path15, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path15, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path15, left, right) : yield* FromUnknown(path15, left, right);
+function* FromValue4(path16, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path16, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path16, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path16, left, right) : yield* FromUnknown(path16, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8674,7 +8738,7 @@ async function loadProjectConfig(repo, hostFile) {
 }
 async function readOptional(repo, name) {
   try {
-    return await (0, import_promises3.readFile)(import_node_path3.default.join(repo, ".cw", name), "utf8");
+    return await (0, import_promises4.readFile)(import_node_path4.default.join(repo, ".cw", name), "utf8");
   } catch (error) {
     if (isNotFound(error)) return null;
     throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
@@ -8753,22 +8817,22 @@ function normalizeProtectedPath(value) {
 }
 
 // src/core/flow.ts
-var import_node_path10 = __toESM(require("node:path"), 1);
+var import_node_path11 = __toESM(require("node:path"), 1);
 
 // src/core/check.ts
-var import_promises5 = require("node:fs/promises");
-var import_node_os2 = require("node:os");
-var import_node_path4 = __toESM(require("node:path"), 1);
+var import_promises6 = require("node:fs/promises");
+var import_node_os3 = require("node:os");
+var import_node_path5 = __toESM(require("node:path"), 1);
 
 // src/core/process.ts
 var import_node_child_process2 = require("node:child_process");
-var import_promises4 = require("node:fs/promises");
+var import_promises5 = require("node:fs/promises");
 var KILL_GRACE_MS = 5e3;
 var GROUP_POLL_MS = 50;
 async function runProcess(options) {
-  const stdout = await (0, import_promises4.open)(options.stdoutPath, "wx");
-  const stderr = await (0, import_promises4.open)(options.stderrPath, "wx");
-  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises4.open)(options.stdinPath, "r");
+  const stdout = await (0, import_promises5.open)(options.stdoutPath, "wx");
+  const stderr = await (0, import_promises5.open)(options.stderrPath, "wx");
+  const stdin = options.stdinPath === void 0 ? null : await (0, import_promises5.open)(options.stdinPath, "r");
   const abort = linkAbort(options.signal, options.timeoutMs);
   let child;
   let watch;
@@ -8938,9 +9002,9 @@ function delay(ms) {
 var TAIL_LINES = 80;
 var TAIL_BYTES = 16 * 1024;
 async function runEndCheck(request) {
-  const directory = await (0, import_promises5.mkdtemp)(import_node_path4.default.join((0, import_node_os2.tmpdir)(), "cw-check-"));
-  const stdoutPath = import_node_path4.default.join(directory, "stdout.log");
-  const stderrPath = import_node_path4.default.join(directory, "stderr.log");
+  const directory = await (0, import_promises6.mkdtemp)(import_node_path5.default.join((0, import_node_os3.tmpdir)(), "cw-check-"));
+  const stdoutPath = import_node_path5.default.join(directory, "stdout.log");
+  const stderrPath = import_node_path5.default.join(directory, "stderr.log");
   const started = Date.now();
   let run = null;
   try {
@@ -8969,7 +9033,7 @@ async function runEndCheck(request) {
     };
   } finally {
     run?.dispose();
-    await (0, import_promises5.rm)(directory, { recursive: true, force: true });
+    await (0, import_promises6.rm)(directory, { recursive: true, force: true });
   }
 }
 function checkPassed(outcome) {
@@ -9002,7 +9066,7 @@ async function readTail(file) {
   let chunk;
   let cut = false;
   try {
-    const handle = await (0, import_promises5.open)(file, "r");
+    const handle = await (0, import_promises6.open)(file, "r");
     try {
       const size = (await handle.stat()).size;
       const readSize = Math.min(size, TAIL_BYTES);
@@ -9025,17 +9089,17 @@ async function readTail(file) {
 
 // src/core/meter.ts
 var import_node_fs = require("node:fs");
-var import_promises6 = require("node:fs/promises");
-var import_node_path5 = __toESM(require("node:path"), 1);
+var import_promises7 = require("node:fs/promises");
+var import_node_path6 = __toESM(require("node:path"), 1);
 var APPEND_FLAGS = import_node_fs.constants.O_APPEND | import_node_fs.constants.O_CREAT | import_node_fs.constants.O_WRONLY | import_node_fs.constants.O_NOFOLLOW;
 async function appendMeterLine(repo, record) {
-  const dir = import_node_path5.default.join(repo, ".cw");
-  await (0, import_promises6.mkdir)(dir, { recursive: true });
-  const stat = await (0, import_promises6.lstat)(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+  const dir = import_node_path6.default.join(repo, ".cw");
+  await (0, import_promises7.mkdir)(dir, { recursive: true });
+  const stat2 = await (0, import_promises7.lstat)(dir);
+  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165\u8BA1\u91CF");
   }
-  const handle = await (0, import_promises6.open)(import_node_path5.default.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
+  const handle = await (0, import_promises7.open)(import_node_path6.default.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
   try {
     await handle.writeFile(`${JSON.stringify(record)}
 `);
@@ -9147,16 +9211,16 @@ ${plan}`;
 }
 
 // src/core/protect.ts
-var import_node_path7 = __toESM(require("node:path"), 1);
+var import_node_path8 = __toESM(require("node:path"), 1);
 
 // src/core/scope.ts
-var import_promises7 = require("node:fs/promises");
-var import_node_path6 = __toESM(require("node:path"), 1);
+var import_promises8 = require("node:fs/promises");
+var import_node_path7 = __toESM(require("node:path"), 1);
 var SCOPE_FILE = ".cw/scope.txt";
 async function readScope(repo) {
   let text2;
   try {
-    text2 = await (0, import_promises7.readFile)(import_node_path6.default.join(repo, SCOPE_FILE), "utf8");
+    text2 = await (0, import_promises8.readFile)(import_node_path7.default.join(repo, SCOPE_FILE), "utf8");
   } catch {
     return null;
   }
@@ -9164,7 +9228,7 @@ async function readScope(repo) {
   return prefixes.length === 0 ? null : prefixes;
 }
 function inScope(relative, prefixes) {
-  const normalized = relative.split(import_node_path6.default.sep).join("/");
+  const normalized = relative.split(import_node_path7.default.sep).join("/");
   if (normalized === ".cw" || normalized.startsWith(".cw/")) return true;
   return prefixes.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
 }
@@ -9174,29 +9238,29 @@ var scopeReason = (target) => `[counterweight] ${target} \u5728 ${SCOPE_FILE} \u
 var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
 var GOAL_FILE = ".cw/goal.md";
 function isProtected(relative, patterns) {
-  const normalized = relative.split(import_node_path7.default.sep).join("/");
+  const normalized = relative.split(import_node_path8.default.sep).join("/");
   if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE || normalized === SCOPE_FILE) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
 // src/roles/tools.ts
-var import_promises9 = require("node:fs/promises");
-var import_node_path9 = __toESM(require("node:path"), 1);
+var import_promises10 = require("node:fs/promises");
+var import_node_path10 = __toESM(require("node:path"), 1);
 
 // src/core/cwfile.ts
-var import_promises8 = require("node:fs/promises");
-var import_node_path8 = __toESM(require("node:path"), 1);
+var import_promises9 = require("node:fs/promises");
+var import_node_path9 = __toESM(require("node:path"), 1);
 async function writeCwFile(repo, name, content) {
-  const dir = import_node_path8.default.join(repo, ".cw");
-  await (0, import_promises8.mkdir)(dir, { recursive: true });
-  const stat = await (0, import_promises8.lstat)(dir);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+  const dir = import_node_path9.default.join(repo, ".cw");
+  await (0, import_promises9.mkdir)(dir, { recursive: true });
+  const stat2 = await (0, import_promises9.lstat)(dir);
+  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
   }
-  const target = import_node_path8.default.join(dir, name);
+  const target = import_node_path9.default.join(dir, name);
   const temp = `${target}.${process.pid}.tmp`;
-  await (0, import_promises8.writeFile)(temp, content);
-  await (0, import_promises8.rename)(temp, target);
+  await (0, import_promises9.writeFile)(temp, content);
+  await (0, import_promises9.rename)(temp, target);
   return target;
 }
 
@@ -9294,7 +9358,7 @@ ${run.answer}`
 }
 async function readHistory(repo) {
   try {
-    return await (0, import_promises9.readFile)(import_node_path9.default.join(repo, ".cw", HISTORY_FILE), "utf8");
+    return await (0, import_promises10.readFile)(import_node_path10.default.join(repo, ".cw", HISTORY_FILE), "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -9369,9 +9433,9 @@ async function checkProtectedTarget(root, cwd, patterns, raw) {
   return null;
 }
 function toRepoRelative(repoRoot, cwd, value) {
-  const relative = import_node_path10.default.relative(repoRoot, import_node_path10.default.resolve(cwd, value));
-  if (relative === "" || relative.startsWith("..") || import_node_path10.default.isAbsolute(relative)) return null;
-  return relative.split(import_node_path10.default.sep).join("/");
+  const relative = import_node_path11.default.relative(repoRoot, import_node_path11.default.resolve(cwd, value));
+  if (relative === "" || relative.startsWith("..") || import_node_path11.default.isAbsolute(relative)) return null;
+  return relative.split(import_node_path11.default.sep).join("/");
 }
 async function checkGoalPaths(root, cwd, paths) {
   try {
@@ -9416,11 +9480,13 @@ async function checkScopePaths(root, cwd, paths) {
   }
 }
 var missingCheckNotice = (project, setup) => project?.check != null ? null : `[counterweight] \u7ED3\u675F\u68C0\u67E5\u6CA1\u6709\u914D\u7F6E\uFF08${project === null ? "\u6CA1\u6709 .cw/project.toml" : ".cw/project.toml \u91CC\u6CA1\u6709 [check]"}\uFF09\uFF0C\u56DE\u5408\u7ED3\u675F\u65F6\u4E0D\u4F1A\u8DD1\u68C0\u67E5\u3002\u8FD0\u884C ${setup} \u914D\u7F6E\uFF0C\u6216\u5728 .cw/project.toml \u5199 [check] cmd = ["..."]\u3002`;
+var NO_CHECK = { outcome: "unknown", evidence: { gap: "\u6CA1\u6709\u914D\u7F6E\u7ED3\u675F\u68C0\u67E5" } };
 async function endCheck(params) {
   const { root, project, session, signal } = params;
   const texts = [];
   let checkReport = null;
   let attention = false;
+  let settled = NO_CHECK;
   if (project.check !== null) {
     try {
       const check = project.check;
@@ -9436,7 +9502,7 @@ async function endCheck(params) {
           outcome: "cancelled"
         }).catch(() => {
         });
-        return { continueWith: null, report: null, attention: false };
+        return { continueWith: null, report: null, attention: false, settled: { outcome: "cancelled", evidence: { gap: "\u7ED3\u675F\u68C0\u67E5\u88AB\u53D6\u6D88" } } };
       }
       const passed = checkPassed(outcome);
       const retry = !passed && await params.claim("repair");
@@ -9453,12 +9519,14 @@ async function endCheck(params) {
         outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported"
       }).catch(() => {
       });
-      if (retry) return { continueWith: report, report: null, attention: false };
+      if (retry) return { continueWith: report, report: null, attention: false, settled: NO_CHECK };
       checkReport = report;
       attention = !passed;
+      settled = { outcome: passed ? "ok" : "failed", evidence: { text: report } };
     } catch (error) {
       checkReport = `[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u5B8C\u6210\uFF0C\u672C\u8F6E\u6CA1\u6709\u5F97\u5230\u68C0\u67E5\u7ED3\u8BBA\uFF1A${message(error)}`;
       attention = true;
+      settled = { outcome: "unknown", evidence: { gap: checkReport } };
     }
     texts.push(checkReport);
   }
@@ -9467,12 +9535,12 @@ async function endCheck(params) {
     texts.push(auto.failure);
     attention = true;
   }
-  if (auto.findings !== null) return { continueWith: auto.findings, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
+  if (auto.findings !== null) return { continueWith: auto.findings, report: texts.length === 0 ? null : texts.join("\n\n"), attention, settled };
   if (auto.text !== null) {
     texts.push(auto.text);
     attention = true;
   }
-  return { continueWith: null, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
+  return { continueWith: null, report: texts.length === 0 ? null : texts.join("\n\n"), attention, settled };
 }
 async function runAuto(params, checkLine) {
   const none = { text: null, findings: null, failure: null };
@@ -9560,9 +9628,9 @@ async function pausePlan(params) {
 }
 
 // src/core/goal.ts
-var import_node_crypto = require("node:crypto");
-var import_promises11 = require("node:fs/promises");
-var import_node_path12 = __toESM(require("node:path"), 1);
+var import_node_crypto2 = require("node:crypto");
+var import_promises12 = require("node:fs/promises");
+var import_node_path13 = __toESM(require("node:path"), 1);
 
 // src/roles/explorer.md
 var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
@@ -9640,20 +9708,20 @@ Stop when the current question is answered. Do not ask whether to continue.`;
 }
 
 // src/core/turnstate.ts
-var import_promises10 = require("node:fs/promises");
-var import_node_path11 = __toESM(require("node:path"), 1);
+var import_promises11 = require("node:fs/promises");
+var import_node_path12 = __toESM(require("node:path"), 1);
 function sessionDir(session) {
   const data = process.env.PLUGIN_DATA ?? process.env.CLAUDE_PLUGIN_DATA;
   if (data === void 0 || data === "") return null;
   if (session === "" || session.includes("/") || session.includes("\\") || session.includes("..")) return null;
-  return import_node_path11.default.join(data, "sessions", session);
+  return import_node_path12.default.join(data, "sessions", session);
 }
 async function claim(session, turn, name) {
   try {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return false;
-    await (0, import_promises10.mkdir)(dir, { recursive: true });
-    const handle = await (0, import_promises10.open)(import_node_path11.default.join(dir, `${turn}.${name}`), "wx");
+    await (0, import_promises11.mkdir)(dir, { recursive: true });
+    const handle = await (0, import_promises11.open)(import_node_path12.default.join(dir, `${turn}.${name}`), "wx");
     await handle.close();
     return true;
   } catch {
@@ -9663,14 +9731,14 @@ async function claim(session, turn, name) {
 async function savePrompt(session, turn, prompt) {
   const dir = sessionDir(session);
   if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
-  await (0, import_promises10.mkdir)(dir, { recursive: true });
-  await (0, import_promises10.writeFile)(import_node_path11.default.join(dir, `${turn}.prompt`), prompt);
+  await (0, import_promises11.mkdir)(dir, { recursive: true });
+  await (0, import_promises11.writeFile)(import_node_path12.default.join(dir, `${turn}.prompt`), prompt);
 }
 async function loadPrompt(session, turn) {
   try {
     const dir = sessionDir(session);
     if (dir === null) return "";
-    return await (0, import_promises10.readFile)(import_node_path11.default.join(dir, `${turn}.prompt`), "utf8");
+    return await (0, import_promises11.readFile)(import_node_path12.default.join(dir, `${turn}.prompt`), "utf8");
   } catch {
     return "";
   }
@@ -9678,14 +9746,14 @@ async function loadPrompt(session, turn) {
 async function saveBase(session, turn, base) {
   const dir = sessionDir(session);
   if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
-  await (0, import_promises10.mkdir)(dir, { recursive: true });
-  await (0, import_promises10.writeFile)(import_node_path11.default.join(dir, `${turn}.base`), base);
+  await (0, import_promises11.mkdir)(dir, { recursive: true });
+  await (0, import_promises11.writeFile)(import_node_path12.default.join(dir, `${turn}.base`), base);
 }
 async function loadBase(session, turn) {
   try {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return null;
-    const base = (await (0, import_promises10.readFile)(import_node_path11.default.join(dir, `${turn}.base`), "utf8")).trim();
+    const base = (await (0, import_promises11.readFile)(import_node_path12.default.join(dir, `${turn}.base`), "utf8")).trim();
     return base === "" ? null : base;
   } catch {
     return null;
@@ -9693,14 +9761,14 @@ async function loadBase(session, turn) {
 }
 async function endSession(session) {
   const dir = sessionDir(session);
-  if (dir !== null) await (0, import_promises10.rm)(dir, { recursive: true, force: true });
+  if (dir !== null) await (0, import_promises11.rm)(dir, { recursive: true, force: true });
 }
 async function recordAction(session, turn, action) {
   try {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
-    await (0, import_promises10.mkdir)(dir, { recursive: true });
-    await (0, import_promises10.appendFile)(import_node_path11.default.join(dir, `${turn}.actions`), `${JSON.stringify(action)}
+    await (0, import_promises11.mkdir)(dir, { recursive: true });
+    await (0, import_promises11.appendFile)(import_node_path12.default.join(dir, `${turn}.actions`), `${JSON.stringify(action)}
 `);
   } catch {
   }
@@ -9710,7 +9778,7 @@ async function loadActions(session, turn) {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return [];
     const actions = [];
-    for (const line of (await (0, import_promises10.readFile)(import_node_path11.default.join(dir, `${turn}.actions`), "utf8")).split("\n")) {
+    for (const line of (await (0, import_promises11.readFile)(import_node_path12.default.join(dir, `${turn}.actions`), "utf8")).split("\n")) {
       try {
         const value = JSON.parse(line);
         if (typeof value?.tool === "string" && typeof value.detail === "string") {
@@ -9727,7 +9795,7 @@ async function loadActions(session, turn) {
 async function loadGoalHash(session) {
   try {
     const dir = sessionDir(session);
-    return dir === null ? null : await (0, import_promises10.readFile)(import_node_path11.default.join(dir, "goal.sha256"), "utf8");
+    return dir === null ? null : await (0, import_promises11.readFile)(import_node_path12.default.join(dir, "goal.sha256"), "utf8");
   } catch {
     return null;
   }
@@ -9736,8 +9804,8 @@ async function saveGoalHash(session, hash) {
   try {
     const dir = sessionDir(session);
     if (dir === null) return;
-    await (0, import_promises10.mkdir)(dir, { recursive: true });
-    await (0, import_promises10.writeFile)(import_node_path11.default.join(dir, "goal.sha256"), hash);
+    await (0, import_promises11.mkdir)(dir, { recursive: true });
+    await (0, import_promises11.writeFile)(import_node_path12.default.join(dir, "goal.sha256"), hash);
   } catch {
   }
 }
@@ -9746,12 +9814,12 @@ async function saveGoalHash(session, hash) {
 async function readGoal(repo) {
   if (repo === null) return null;
   try {
-    return await (0, import_promises11.readFile)(import_node_path12.default.join(repo, GOAL_FILE), "utf8");
+    return await (0, import_promises12.readFile)(import_node_path13.default.join(repo, GOAL_FILE), "utf8");
   } catch {
     return null;
   }
 }
-var goalHash = (goal) => (0, import_node_crypto.createHash)("sha256").update(goalPart(goal) === null ? "" : goal).digest("hex");
+var goalHash = (goal) => (0, import_node_crypto2.createHash)("sha256").update(goalPart(goal) === null ? "" : goal).digest("hex");
 var GOAL_REMOVED = "The user removed .cw/goal.md. The earlier goal no longer applies.";
 var GOAL_REPLACED = "This replaces any earlier goal in this conversation.";
 async function rememberGoal(session, goal) {
@@ -9781,12 +9849,12 @@ function patchPaths(text2) {
 }
 
 // src/adapters/codex/runner.ts
-var import_promises13 = require("node:fs/promises");
-var import_node_os3 = require("node:os");
-var import_node_path13 = __toESM(require("node:path"), 1);
+var import_promises14 = require("node:fs/promises");
+var import_node_os4 = require("node:os");
+var import_node_path14 = __toESM(require("node:path"), 1);
 
 // src/core/budget.ts
-var import_promises12 = require("node:fs/promises");
+var import_promises13 = require("node:fs/promises");
 function stepLimit(role) {
   return role === "research" ? 80 : role === "planner" ? 1 : 30;
 }
@@ -9805,7 +9873,7 @@ function watchSteps(options) {
   timer = setInterval(() => {
     if (reading) return;
     reading = true;
-    (0, import_promises12.readFile)(options.file, "utf8").then((text2) => {
+    (0, import_promises13.readFile)(options.file, "utf8").then((text2) => {
       if (timer !== void 0 && options.count(text2) > options.limit) {
         stop2();
         options.onExceed();
@@ -9840,17 +9908,17 @@ function roleArgs(request) {
   ];
 }
 async function runRole(request) {
-  const scratch = await (0, import_promises13.mkdtemp)(import_node_path13.default.join((0, import_node_os3.tmpdir)(), "cw-role-"));
+  const scratch = await (0, import_promises14.mkdtemp)(import_node_path14.default.join((0, import_node_os4.tmpdir)(), "cw-role-"));
   try {
-    const messagePath = import_node_path13.default.join(scratch, "message.md");
-    await (0, import_promises13.writeFile)(messagePath, request.message);
+    const messagePath = import_node_path14.default.join(scratch, "message.md");
+    await (0, import_promises14.writeFile)(messagePath, request.message);
     const limit = stepLimit(request.role);
     const own = new AbortController();
     const forward = () => own.abort();
     if (request.signal?.aborted) forward();
     else request.signal?.addEventListener("abort", forward, { once: true });
     let overBudget = false;
-    const stdoutPath = import_node_path13.default.join(scratch, "stdout.jsonl");
+    const stdoutPath = import_node_path14.default.join(scratch, "stdout.jsonl");
     const stopWatch = watchSteps({
       file: stdoutPath,
       limit,
@@ -9869,7 +9937,7 @@ async function runRole(request) {
         env: { ...process.env },
         timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
         stdoutPath,
-        stderrPath: import_node_path13.default.join(scratch, "stderr.log"),
+        stderrPath: import_node_path14.default.join(scratch, "stderr.log"),
         stdinPath: messagePath,
         signal: own.signal
       });
@@ -9880,7 +9948,7 @@ async function runRole(request) {
     try {
       let stdout = "";
       try {
-        stdout = await (0, import_promises13.readFile)(import_node_path13.default.join(scratch, "stdout.jsonl"), "utf8");
+        stdout = await (0, import_promises14.readFile)(import_node_path14.default.join(scratch, "stdout.jsonl"), "utf8");
       } catch (error) {
         return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf2(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
       }
@@ -9893,7 +9961,7 @@ async function runRole(request) {
       if (outcome.timedOut) return failure("\u8D85\u65F6\uFF0C\u5B50\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62");
       if (outcome.runnerError !== null) return failure(`\u65E0\u6CD5\u542F\u52A8 codex\uFF1A${outcome.runnerError}`);
       if (!events.completed) {
-        const stderr = await (0, import_promises13.readFile)(import_node_path13.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
+        const stderr = await (0, import_promises14.readFile)(import_node_path14.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
         const detail = events.failure ?? stderr.trim().split("\n").pop()?.slice(0, 300) ?? "";
         return failure(`\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u9000\u51FA\u7801 ${outcome.exitCode}${detail === "" ? "" : `\uFF1A${detail}`}\uFF09`);
       }
@@ -9904,7 +9972,7 @@ async function runRole(request) {
       outcome.dispose();
     }
   } finally {
-    await (0, import_promises13.rm)(scratch, { recursive: true, force: true });
+    await (0, import_promises14.rm)(scratch, { recursive: true, force: true });
   }
 }
 function countToolItems(stdout) {
@@ -10086,8 +10154,8 @@ Counterweight ${version} active`
 }
 async function pluginVersion() {
   try {
-    const manifest = JSON.parse(await (0, import_promises14.readFile)(
-      import_node_path14.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
+    const manifest = JSON.parse(await (0, import_promises15.readFile)(
+      import_node_path15.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
       "utf8"
     ));
     return typeof manifest.version === "string" ? manifest.version : "unknown";
@@ -10143,22 +10211,27 @@ async function preToolUse(root, cwd, input) {
     runner: runRole,
     signal: new AbortController().signal,
     claim: () => claim(session, turn, "pause"),
-    transcript: async () => renderTranscript(parseTranscript(await (0, import_promises14.readFile)(input.transcript_path ?? "", "utf8")))
+    transcript: async () => renderTranscript(parseTranscript(await (0, import_promises15.readFile)(input.transcript_path ?? "", "utf8")))
   });
   if (plan !== null) return deny(plan);
   for (const target of paths) await recordAction(session, turn, { tool: "apply_patch", detail: target });
   return null;
 }
 async function stop(root, input) {
+  const session = input.session_id ?? "";
+  const turn = input.turn_id ?? "";
+  const chronicle2 = (settled) => writeChronicleEvent({ host: "codex", session, turn, workspace: root, ...settled });
   let project;
   try {
     project = await loadProjectConfig(root, "codex.toml");
   } catch (error) {
+    await chronicle2({ outcome: "unknown", evidence: { gap: `\u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message2(error)}` } });
     return { systemMessage: `[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5\uFF1A${message2(error)}` };
   }
-  if (project === null) return null;
-  const session = input.session_id ?? "";
-  const turn = input.turn_id ?? "";
+  if (project === null) {
+    await chronicle2({ outcome: "unknown", evidence: { gap: "\u6CA1\u6709 .cw/project.toml\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5" } });
+    return null;
+  }
   const result = await endCheck({
     root,
     project,
@@ -10173,6 +10246,7 @@ async function stop(root, input) {
   if (result.continueWith !== null) {
     return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? void 0 };
   }
+  await chronicle2(result.settled);
   return result.report === null ? null : { systemMessage: result.report };
 }
 async function postModelRequest(root, input) {

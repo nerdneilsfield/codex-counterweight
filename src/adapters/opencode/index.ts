@@ -3,6 +3,7 @@
  * OpenCode 没有给插件向用户显示文字的通道，所以检查通过时什么也不显示，只写 `.cw/meter.jsonl`。
  */
 import { snapshotTree, type ActionRecord } from "../../core/auto.js";
+import { writeChronicleEvent, type ChronicleInput } from "../../core/chronicle-event.js";
 import { dangerousCommand } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, pausePlan } from "../../core/flow.js";
@@ -180,22 +181,35 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
       if (await isChild(sessionID)) return;
       const turn = turnOf(sessionID);
       if (turn.relayed) return;
+      // 回合真正结束时记一条 chronicle 事件；OpenCode 没有回合 id。
+      const chronicle = (settled: Pick<ChronicleInput, "outcome" | "evidence">) =>
+        writeChronicleEvent({ host: "opencode", session: sessionID, turn: null, workspace: root, ...settled });
       let result;
       try {
         const project = await load();
-        if (project === null) return;
+        if (project === null) {
+          await chronicle({ outcome: "unknown", evidence: { gap: "没有 .cw/project.toml，未运行检查" } });
+          return;
+        }
         result = await endCheck({
           root, project, session: sessionID, runner: makeRunner(ctx.session, sessionID, roleSessions, steps),
           signal: tracked.signal, claim: claimFor(sessionID), prompt: async () => turn.prompt,
           actions: async () => turn.actions, base: async () => turn.base,
         });
       } catch (error) {
-        result = { continueWith: null, report: `[counterweight] 配置非法，未运行检查：${message(error)}`, attention: true };
+        const report = `[counterweight] 配置非法，未运行检查：${message(error)}`;
+        result = { continueWith: null, report, attention: true, settled: { outcome: "unknown" as const, evidence: { gap: report } } };
       }
-      if (tracked.signal.aborted) return;
+      if (tracked.signal.aborted) {
+        await chronicle({ outcome: "cancelled", evidence: { gap: "回合被中断" } });
+        return;
+      }
       if (result.continueWith !== null) {
         await ctx.session.synthetic({ sessionID, text: result.continueWith });
-      } else if (result.attention && result.report !== null) {
+        return;
+      }
+      await chronicle(result.settled);
+      if (result.attention && result.report !== null) {
         turn.relayed = true;
         await ctx.session.synthetic({ sessionID, text: RELAY(result.report) });
       }

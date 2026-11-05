@@ -4,6 +4,7 @@
  */
 import path from "node:path";
 import { changedFiles, chronicleReport, renderActions, workingDiff, type ActionRecord } from "./auto.js";
+import type { ChronicleInput } from "./chronicle-event.js";
 import { checkPassed, renderCheckReport, runEndCheck } from "./check.js";
 import type { ProjectConfig } from "./config.js";
 import { recordEvent } from "./meter.js";
@@ -139,7 +140,11 @@ export interface EndCheckResult {
   report: string | null;
   /** 报告里有用户必须看到的问题：检查没通过或没完成，或续跑之后仍有审查发现。 */
   attention: boolean;
+  /** 这一回合的结论，写 chronicle 事件用；`continueWith` 非空时回合没有结束，不用它。 */
+  settled: Pick<ChronicleInput, "outcome" | "evidence">;
 }
+
+export const NO_CHECK: EndCheckResult["settled"] = { outcome: "unknown", evidence: { gap: "没有配置结束检查" } };
 
 /**
  * 结束检查和自动任务。检查失败时第一次让模型修，额度用完后如实报告；审查发现同理，额度独立。
@@ -163,6 +168,7 @@ export async function endCheck(params: {
   const texts: string[] = [];
   let checkReport: string | null = null;
   let attention = false;
+  let settled = NO_CHECK;
   if (project.check !== null) {
     try {
       const check = project.check;
@@ -175,7 +181,7 @@ export async function endCheck(params: {
           exit_code: outcome.exitCode, timed_out: false, spawn_error: outcome.runnerError,
           ms: Date.now() - started, outcome: "cancelled",
         }).catch(() => {});
-        return { continueWith: null, report: null, attention: false };
+        return { continueWith: null, report: null, attention: false, settled: { outcome: "cancelled", evidence: { gap: "结束检查被取消" } } };
       }
       const passed = checkPassed(outcome);
       const retry = !passed && await params.claim("repair");
@@ -191,12 +197,14 @@ export async function endCheck(params: {
         ms: Date.now() - started,
         outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported",
       }).catch(() => {});
-      if (retry) return { continueWith: report, report: null, attention: false };
+      if (retry) return { continueWith: report, report: null, attention: false, settled: NO_CHECK };
       checkReport = report;
       attention = !passed;
+      settled = { outcome: passed ? "ok" : "failed", evidence: { text: report } };
     } catch (error) {
       checkReport = `[counterweight] 结束检查未能完成，本轮没有得到检查结论：${message(error)}`;
       attention = true;
+      settled = { outcome: "unknown", evidence: { gap: checkReport } };
     }
     texts.push(checkReport);
   }
@@ -207,12 +215,12 @@ export async function endCheck(params: {
     attention = true;
   }
   // 审查发现续跑时，检查报告留给用户，发现作为续跑内容交回模型。
-  if (auto.findings !== null) return { continueWith: auto.findings, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
+  if (auto.findings !== null) return { continueWith: auto.findings, report: texts.length === 0 ? null : texts.join("\n\n"), attention, settled };
   if (auto.text !== null) {
     texts.push(auto.text);
     attention = true;
   }
-  return { continueWith: null, report: texts.length === 0 ? null : texts.join("\n\n"), attention };
+  return { continueWith: null, report: texts.length === 0 ? null : texts.join("\n\n"), attention, settled };
 }
 
 /**

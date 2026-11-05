@@ -1,5 +1,5 @@
 import { spawn, execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -571,5 +571,71 @@ describe("inject event", () => {
     await writeFile(path.join(repo, ".cw/goal.md"), " \n\n");
     await runHook({ hook_event_name: "SessionStart", source: "startup" });
     expect((await events())[0].detail.goal).toBe(false);
+  });
+});
+
+describe("chronicle event", () => {
+  const chronicle = () => path.join(sandbox.data, ".agents", "chronicle");
+  const events = async () => {
+    const root = path.join(chronicle(), "events");
+    const machines = await readdir(root).catch(() => [] as string[]);
+    const out = [];
+    for (const machine of machines) {
+      for (const name of await readdir(path.join(root, machine))) {
+        out.push(JSON.parse(await readFile(path.join(root, machine, name), "utf8")));
+      }
+    }
+    return out;
+  };
+  const evidenceOf = async (id: string) => {
+    const root = path.join(chronicle(), "evidence");
+    for (const machine of await readdir(root)) {
+      for (const name of await readdir(path.join(root, machine))) {
+        const value = JSON.parse(await readFile(path.join(root, machine, name), "utf8"));
+        if (value.event === id) return value;
+      }
+    }
+    return null;
+  };
+  const stop = () => runHook({ hook_event_name: "Stop" });
+
+  it("writes nothing and creates nothing when ~/.agents/chronicle does not exist", async () => {
+    await writeConfig('version = 1\n[check]\ncmd = ["true"]\n');
+    await stop();
+    await expect(stat(path.join(sandbox.data, ".agents"))).rejects.toThrow();
+  });
+
+  it("records ok with the check report when the check passes, tagged with the session and turn", async () => {
+    await mkdir(chronicle(), { recursive: true });
+    await writeConfig('version = 1\n[check]\ncmd = ["true"]\n');
+    await stop();
+    const [event] = await events();
+    expect(event).toMatchObject({ outcome: "ok", agent: "codex:s1", turn: "t1", workspace: await realpath(repo), project: null });
+    expect((await evidenceOf(event.id)).text).toContain("通过");
+  });
+
+  it("records failed only at the final settle, not at the repair continuation", async () => {
+    await mkdir(chronicle(), { recursive: true });
+    await writeConfig('version = 1\n[check]\ncmd = ["sh", "-c", "echo boom; exit 3"]\n');
+    expect((await stop()).out.decision).toBe("block");
+    expect(await events()).toEqual([]);
+    await stop();
+    const [event] = await events();
+    expect(event.outcome).toBe("failed");
+    expect((await evidenceOf(event.id)).text).toContain("退出码 3");
+  });
+
+  it("records unknown with a gap when there is no check, no project.toml, or an invalid config", async () => {
+    await mkdir(chronicle(), { recursive: true });
+    await stop();
+    await writeConfig("version = 1\n");
+    await stop();
+    await writeConfig("version = 2\n");
+    await stop();
+    const all = await events();
+    expect(all.map((event) => event.outcome)).toEqual(["unknown", "unknown", "unknown"]);
+    const gaps = await Promise.all(all.map(async (event) => (await evidenceOf(event.id)).gap));
+    expect(gaps.every((gap) => typeof gap === "string" && gap !== "")).toBe(true);
+    expect(gaps.some((gap) => gap.includes("配置非法"))).toBe(true);
   });
 });
