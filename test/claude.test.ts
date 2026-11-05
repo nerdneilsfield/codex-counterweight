@@ -370,3 +370,14 @@ describe("chronicle event", () => {
     expect(event).toMatchObject({ outcome: "failed", agent: "claude:s1", turn: "p1" });
   });
 });
+
+describe("pending count", () => {
+  it("appends the count to the check line, and shows its own line without a check", async () => {
+    await mkdir(path.join(repo, ".cw"), { recursive: true });
+    await writeFile(path.join(repo, ".cw/pending.md"), "- 2026-11-05 | project | AGENTS.md | one\n  Evidence: e\n- 2026-11-06 | user | memory | two\n");
+    await project('version = 1\n[check]\ncmd = ["true"]\n');
+    expect(((await hook({ hook_event_name: "Stop" })).out.systemMessage as string)).toMatch(/通过.*；待批 2 条$/);
+    await project("version = 1\n");
+    expect((await hook({ hook_event_name: "Stop" })).out.systemMessage).toBe("[counterweight] 待批 2 条（.cw/pending.md）");
+  });
+});

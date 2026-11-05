@@ -27,8 +27,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/adapters/codex/hook.ts
-var import_promises15 = require("node:fs/promises");
-var import_node_path15 = __toESM(require("node:path"), 1);
+var import_promises16 = require("node:fs/promises");
+var import_node_path16 = __toESM(require("node:path"), 1);
 
 // src/core/auto.ts
 var import_promises = require("node:fs/promises");
@@ -8224,23 +8224,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path16, value) {
-  return { type: "update", path: path16, value };
+function CreateUpdate(path17, value) {
+  return { type: "update", path: path17, value };
 }
-function CreateInsert(path16, value) {
-  return { type: "insert", path: path16, value };
+function CreateInsert(path17, value) {
+  return { type: "insert", path: path17, value };
 }
-function CreateDelete(path16) {
-  return { type: "delete", path: path16 };
+function CreateDelete(path17) {
+  return { type: "delete", path: path17 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path16, left, right) {
+function* FromObject17(path17, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path16, right);
+    return yield CreateUpdate(path17, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -8250,7 +8250,7 @@ function* FromObject17(path16, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path16}/${key}`, right[key]);
+    yield CreateInsert(`${path17}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -8259,52 +8259,52 @@ function* FromObject17(path16, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path16}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path17}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path16}/${key}`);
+    yield CreateDelete(`${path17}/${key}`);
   }
 }
-function* FromArray13(path16, left, right) {
+function* FromArray13(path17, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path16, right);
+    return yield CreateUpdate(path17, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path16}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path17}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path16}/${i}`, right[i]);
+    yield CreateInsert(`${path17}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path16}/${i}`);
+    yield CreateDelete(`${path17}/${i}`);
   }
 }
-function* FromTypedArray2(path16, left, right) {
+function* FromTypedArray2(path17, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path16}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path17}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path16, right);
+    return yield CreateUpdate(path17, right);
   }
 }
-function* FromUnknown(path16, left, right) {
+function* FromUnknown(path17, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path16, right);
+  yield CreateUpdate(path17, right);
 }
-function* FromValue4(path16, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path16, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path16, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path16, left, right) : yield* FromUnknown(path16, left, right);
+function* FromValue4(path17, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path17, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path17, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path17, left, right) : yield* FromUnknown(path17, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -9627,10 +9627,29 @@ async function pausePlan(params) {
   }
 }
 
+// src/core/pending.ts
+var import_promises11 = require("node:fs/promises");
+var import_node_path12 = __toESM(require("node:path"), 1);
+var ENTRY = /^- \d{4}-\d{2}-\d{2} \|/;
+async function pendingCount(repo) {
+  try {
+    const text2 = await (0, import_promises11.readFile)(import_node_path12.default.join(repo, ".cw", "pending.md"), "utf8");
+    return text2.split("\n").filter((line) => ENTRY.test(line)).length;
+  } catch {
+    return 0;
+  }
+}
+function withPending(report, count) {
+  if (count <= 0) return report;
+  if (report === null) return `[counterweight] \u5F85\u6279 ${count} \u6761\uFF08.cw/pending.md\uFF09`;
+  const at = report.indexOf("\n");
+  return at === -1 ? `${report}\uFF1B\u5F85\u6279 ${count} \u6761` : `${report.slice(0, at)}\uFF1B\u5F85\u6279 ${count} \u6761${report.slice(at)}`;
+}
+
 // src/core/goal.ts
 var import_node_crypto2 = require("node:crypto");
-var import_promises12 = require("node:fs/promises");
-var import_node_path13 = __toESM(require("node:path"), 1);
+var import_promises13 = require("node:fs/promises");
+var import_node_path14 = __toESM(require("node:path"), 1);
 
 // src/roles/explorer.md
 var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
@@ -9708,20 +9727,20 @@ Stop when the current question is answered. Do not ask whether to continue.`;
 }
 
 // src/core/turnstate.ts
-var import_promises11 = require("node:fs/promises");
-var import_node_path12 = __toESM(require("node:path"), 1);
+var import_promises12 = require("node:fs/promises");
+var import_node_path13 = __toESM(require("node:path"), 1);
 function sessionDir(session) {
   const data = process.env.PLUGIN_DATA ?? process.env.CLAUDE_PLUGIN_DATA;
   if (data === void 0 || data === "") return null;
   if (session === "" || session.includes("/") || session.includes("\\") || session.includes("..")) return null;
-  return import_node_path12.default.join(data, "sessions", session);
+  return import_node_path13.default.join(data, "sessions", session);
 }
 async function claim(session, turn, name) {
   try {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return false;
-    await (0, import_promises11.mkdir)(dir, { recursive: true });
-    const handle = await (0, import_promises11.open)(import_node_path12.default.join(dir, `${turn}.${name}`), "wx");
+    await (0, import_promises12.mkdir)(dir, { recursive: true });
+    const handle = await (0, import_promises12.open)(import_node_path13.default.join(dir, `${turn}.${name}`), "wx");
     await handle.close();
     return true;
   } catch {
@@ -9731,14 +9750,14 @@ async function claim(session, turn, name) {
 async function savePrompt(session, turn, prompt) {
   const dir = sessionDir(session);
   if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
-  await (0, import_promises11.mkdir)(dir, { recursive: true });
-  await (0, import_promises11.writeFile)(import_node_path12.default.join(dir, `${turn}.prompt`), prompt);
+  await (0, import_promises12.mkdir)(dir, { recursive: true });
+  await (0, import_promises12.writeFile)(import_node_path13.default.join(dir, `${turn}.prompt`), prompt);
 }
 async function loadPrompt(session, turn) {
   try {
     const dir = sessionDir(session);
     if (dir === null) return "";
-    return await (0, import_promises11.readFile)(import_node_path12.default.join(dir, `${turn}.prompt`), "utf8");
+    return await (0, import_promises12.readFile)(import_node_path13.default.join(dir, `${turn}.prompt`), "utf8");
   } catch {
     return "";
   }
@@ -9746,14 +9765,14 @@ async function loadPrompt(session, turn) {
 async function saveBase(session, turn, base) {
   const dir = sessionDir(session);
   if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
-  await (0, import_promises11.mkdir)(dir, { recursive: true });
-  await (0, import_promises11.writeFile)(import_node_path12.default.join(dir, `${turn}.base`), base);
+  await (0, import_promises12.mkdir)(dir, { recursive: true });
+  await (0, import_promises12.writeFile)(import_node_path13.default.join(dir, `${turn}.base`), base);
 }
 async function loadBase(session, turn) {
   try {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return null;
-    const base = (await (0, import_promises11.readFile)(import_node_path12.default.join(dir, `${turn}.base`), "utf8")).trim();
+    const base = (await (0, import_promises12.readFile)(import_node_path13.default.join(dir, `${turn}.base`), "utf8")).trim();
     return base === "" ? null : base;
   } catch {
     return null;
@@ -9761,14 +9780,14 @@ async function loadBase(session, turn) {
 }
 async function endSession(session) {
   const dir = sessionDir(session);
-  if (dir !== null) await (0, import_promises11.rm)(dir, { recursive: true, force: true });
+  if (dir !== null) await (0, import_promises12.rm)(dir, { recursive: true, force: true });
 }
 async function recordAction(session, turn, action) {
   try {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
-    await (0, import_promises11.mkdir)(dir, { recursive: true });
-    await (0, import_promises11.appendFile)(import_node_path12.default.join(dir, `${turn}.actions`), `${JSON.stringify(action)}
+    await (0, import_promises12.mkdir)(dir, { recursive: true });
+    await (0, import_promises12.appendFile)(import_node_path13.default.join(dir, `${turn}.actions`), `${JSON.stringify(action)}
 `);
   } catch {
   }
@@ -9778,7 +9797,7 @@ async function loadActions(session, turn) {
     const dir = sessionDir(session);
     if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return [];
     const actions = [];
-    for (const line of (await (0, import_promises11.readFile)(import_node_path12.default.join(dir, `${turn}.actions`), "utf8")).split("\n")) {
+    for (const line of (await (0, import_promises12.readFile)(import_node_path13.default.join(dir, `${turn}.actions`), "utf8")).split("\n")) {
       try {
         const value = JSON.parse(line);
         if (typeof value?.tool === "string" && typeof value.detail === "string") {
@@ -9795,7 +9814,7 @@ async function loadActions(session, turn) {
 async function loadGoalHash(session) {
   try {
     const dir = sessionDir(session);
-    return dir === null ? null : await (0, import_promises11.readFile)(import_node_path12.default.join(dir, "goal.sha256"), "utf8");
+    return dir === null ? null : await (0, import_promises12.readFile)(import_node_path13.default.join(dir, "goal.sha256"), "utf8");
   } catch {
     return null;
   }
@@ -9804,8 +9823,8 @@ async function saveGoalHash(session, hash) {
   try {
     const dir = sessionDir(session);
     if (dir === null) return;
-    await (0, import_promises11.mkdir)(dir, { recursive: true });
-    await (0, import_promises11.writeFile)(import_node_path12.default.join(dir, "goal.sha256"), hash);
+    await (0, import_promises12.mkdir)(dir, { recursive: true });
+    await (0, import_promises12.writeFile)(import_node_path13.default.join(dir, "goal.sha256"), hash);
   } catch {
   }
 }
@@ -9814,7 +9833,7 @@ async function saveGoalHash(session, hash) {
 async function readGoal(repo) {
   if (repo === null) return null;
   try {
-    return await (0, import_promises12.readFile)(import_node_path13.default.join(repo, GOAL_FILE), "utf8");
+    return await (0, import_promises13.readFile)(import_node_path14.default.join(repo, GOAL_FILE), "utf8");
   } catch {
     return null;
   }
@@ -9849,12 +9868,12 @@ function patchPaths(text2) {
 }
 
 // src/adapters/codex/runner.ts
-var import_promises14 = require("node:fs/promises");
+var import_promises15 = require("node:fs/promises");
 var import_node_os4 = require("node:os");
-var import_node_path14 = __toESM(require("node:path"), 1);
+var import_node_path15 = __toESM(require("node:path"), 1);
 
 // src/core/budget.ts
-var import_promises13 = require("node:fs/promises");
+var import_promises14 = require("node:fs/promises");
 function stepLimit(role) {
   return role === "research" ? 80 : role === "planner" ? 1 : 30;
 }
@@ -9873,7 +9892,7 @@ function watchSteps(options) {
   timer = setInterval(() => {
     if (reading) return;
     reading = true;
-    (0, import_promises13.readFile)(options.file, "utf8").then((text2) => {
+    (0, import_promises14.readFile)(options.file, "utf8").then((text2) => {
       if (timer !== void 0 && options.count(text2) > options.limit) {
         stop2();
         options.onExceed();
@@ -9908,17 +9927,17 @@ function roleArgs(request) {
   ];
 }
 async function runRole(request) {
-  const scratch = await (0, import_promises14.mkdtemp)(import_node_path14.default.join((0, import_node_os4.tmpdir)(), "cw-role-"));
+  const scratch = await (0, import_promises15.mkdtemp)(import_node_path15.default.join((0, import_node_os4.tmpdir)(), "cw-role-"));
   try {
-    const messagePath = import_node_path14.default.join(scratch, "message.md");
-    await (0, import_promises14.writeFile)(messagePath, request.message);
+    const messagePath = import_node_path15.default.join(scratch, "message.md");
+    await (0, import_promises15.writeFile)(messagePath, request.message);
     const limit = stepLimit(request.role);
     const own = new AbortController();
     const forward = () => own.abort();
     if (request.signal?.aborted) forward();
     else request.signal?.addEventListener("abort", forward, { once: true });
     let overBudget = false;
-    const stdoutPath = import_node_path14.default.join(scratch, "stdout.jsonl");
+    const stdoutPath = import_node_path15.default.join(scratch, "stdout.jsonl");
     const stopWatch = watchSteps({
       file: stdoutPath,
       limit,
@@ -9937,7 +9956,7 @@ async function runRole(request) {
         env: { ...process.env },
         timeoutMs: request.timeoutMs ?? roleTimeoutMs(request.role),
         stdoutPath,
-        stderrPath: import_node_path14.default.join(scratch, "stderr.log"),
+        stderrPath: import_node_path15.default.join(scratch, "stderr.log"),
         stdinPath: messagePath,
         signal: own.signal
       });
@@ -9948,7 +9967,7 @@ async function runRole(request) {
     try {
       let stdout = "";
       try {
-        stdout = await (0, import_promises14.readFile)(import_node_path14.default.join(scratch, "stdout.jsonl"), "utf8");
+        stdout = await (0, import_promises15.readFile)(import_node_path15.default.join(scratch, "stdout.jsonl"), "utf8");
       } catch (error) {
         return { answer: null, error: `\u8F93\u51FA\u4E0D\u53EF\u8BFB\uFF1A${textOf2(error)}`, usage: [], timedOut: outcome.timedOut, cancelled: outcome.cancelled };
       }
@@ -9961,7 +9980,7 @@ async function runRole(request) {
       if (outcome.timedOut) return failure("\u8D85\u65F6\uFF0C\u5B50\u8FDB\u7A0B\u7EC4\u5DF2\u7EC8\u6B62");
       if (outcome.runnerError !== null) return failure(`\u65E0\u6CD5\u542F\u52A8 codex\uFF1A${outcome.runnerError}`);
       if (!events.completed) {
-        const stderr = await (0, import_promises14.readFile)(import_node_path14.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
+        const stderr = await (0, import_promises15.readFile)(import_node_path15.default.join(scratch, "stderr.log"), "utf8").catch(() => "");
         const detail = events.failure ?? stderr.trim().split("\n").pop()?.slice(0, 300) ?? "";
         return failure(`\u672A\u6B63\u5E38\u7ED3\u675F\uFF08\u9000\u51FA\u7801 ${outcome.exitCode}${detail === "" ? "" : `\uFF1A${detail}`}\uFF09`);
       }
@@ -9972,7 +9991,7 @@ async function runRole(request) {
       outcome.dispose();
     }
   } finally {
-    await (0, import_promises14.rm)(scratch, { recursive: true, force: true });
+    await (0, import_promises15.rm)(scratch, { recursive: true, force: true });
   }
 }
 function countToolItems(stdout) {
@@ -10154,8 +10173,8 @@ Counterweight ${version} active`
 }
 async function pluginVersion() {
   try {
-    const manifest = JSON.parse(await (0, import_promises15.readFile)(
-      import_node_path15.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
+    const manifest = JSON.parse(await (0, import_promises16.readFile)(
+      import_node_path16.default.join(process.env.PLUGIN_ROOT ?? "", ".codex-plugin/plugin.json"),
       "utf8"
     ));
     return typeof manifest.version === "string" ? manifest.version : "unknown";
@@ -10211,7 +10230,7 @@ async function preToolUse(root, cwd, input) {
     runner: runRole,
     signal: new AbortController().signal,
     claim: () => claim(session, turn, "pause"),
-    transcript: async () => renderTranscript(parseTranscript(await (0, import_promises15.readFile)(input.transcript_path ?? "", "utf8")))
+    transcript: async () => renderTranscript(parseTranscript(await (0, import_promises16.readFile)(input.transcript_path ?? "", "utf8")))
   });
   if (plan !== null) return deny(plan);
   for (const target of paths) await recordAction(session, turn, { tool: "apply_patch", detail: target });
@@ -10230,7 +10249,8 @@ async function stop(root, input) {
   }
   if (project === null) {
     await chronicle2({ outcome: "unknown", evidence: { gap: "\u6CA1\u6709 .cw/project.toml\uFF0C\u672A\u8FD0\u884C\u68C0\u67E5" } });
-    return null;
+    const pending = withPending(null, await pendingCount(root));
+    return pending === null ? null : { systemMessage: pending };
   }
   const result = await endCheck({
     root,
@@ -10247,7 +10267,8 @@ async function stop(root, input) {
     return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? void 0 };
   }
   await chronicle2(result.settled);
-  return result.report === null ? null : { systemMessage: result.report };
+  const report = withPending(result.report, await pendingCount(root));
+  return report === null ? null : { systemMessage: report };
 }
 async function postModelRequest(root, input) {
   const usage = input.token_usage;

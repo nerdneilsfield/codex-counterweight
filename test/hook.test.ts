@@ -639,3 +639,36 @@ describe("chronicle event", () => {
     expect(gaps.some((gap) => gap.includes("配置非法"))).toBe(true);
   });
 });
+
+describe("pending count", () => {
+  const entries = (n: number) => mkdir(path.join(repo, ".cw"), { recursive: true }).then(() => writeFile(
+    path.join(repo, ".cw/pending.md"),
+    Array.from({ length: n }, (_, i) => `- 2026-11-0${i + 1} | project | AGENTS.md | lesson ${i}\n  Evidence: e\n`).join(""),
+  ));
+  const stop = () => runHook({ hook_event_name: "Stop" });
+
+  it("appends the count to the end-of-turn line", async () => {
+    await writeConfig('version = 1\n[check]\ncmd = ["true"]\n');
+    await entries(2);
+    const message = (await stop()).out.systemMessage as string;
+    expect(message.split("\n")[0]).toMatch(/通过.*；待批 2 条$/);
+  });
+
+  it("shows its own line without a check result or without project.toml, and nothing at 0", async () => {
+    await entries(1);
+    expect((await stop()).out.systemMessage).toBe("[counterweight] 待批 1 条（.cw/pending.md）");
+    await writeConfig("version = 1\n");
+    expect((await stop()).out.systemMessage).toBe("[counterweight] 待批 1 条（.cw/pending.md）");
+    await entries(0);
+    expect((await stop()).stdout).toBe("");
+  });
+
+  it("does not show it on a repair continuation", async () => {
+    await writeConfig('version = 1\n[check]\ncmd = ["sh", "-c", "exit 3"]\n');
+    await entries(1);
+    const first = await stop();
+    expect(first.out.decision).toBe("block");
+    expect(first.stdout).not.toContain("待批");
+    expect((await stop()).out.systemMessage).toContain("待批 1 条");
+  });
+});

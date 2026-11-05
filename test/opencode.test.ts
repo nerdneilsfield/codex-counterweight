@@ -562,3 +562,14 @@ describe("chronicle event", () => {
     expect(await events()).toMatchObject([{ outcome: "unknown" }]);
   });
 });
+
+describe("pending count", () => {
+  it("is not shown: a passing check with pending entries costs no relay call", async () => {
+    await project('version = 1\n[check]\ncmd = ["true"]\n');
+    await writeFile(path.join(repo, ".cw/pending.md"), "- 2026-11-05 | project | AGENTS.md | one\n");
+    const fake = await start();
+    await fake.fire("prompt", { sessionID: "root", prompt: { text: "p" } });
+    await fake.fire("experimental.idle", { sessionID: "root", background: [] });
+    expect(fake.synthetic).toEqual([]);
+  });
+});

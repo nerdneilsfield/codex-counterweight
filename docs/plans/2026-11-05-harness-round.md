@@ -96,4 +96,4 @@ Plan readiness: ready。
 - [x] 4 高危命令和范围锁定
 - [x] 5 `inject` 事件
 - [x] 6 chronicle 事件
-- [ ] 7 待批条数和 gitignore
+- [x] 7 待批条数和 gitignore

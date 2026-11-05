@@ -12,6 +12,7 @@ import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, missingCheckNoti
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordEvent, recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
+import { pendingCount, withPending } from "../../core/pending.js";
 import { renderTranscript } from "../../core/pause.js";
 import { goalUpdate, readGoal, rememberGoal } from "../../core/goal.js";
 import { claim, endSession, loadActions, loadBase, loadPrompt, recordAction, saveBase, savePrompt } from "../../core/turnstate.js";
@@ -190,7 +191,8 @@ async function stop(root: string, input: HookInput): Promise<Output> {
   }
   if (project === null) {
     await chronicle({ outcome: "unknown", evidence: { gap: "没有 .cw/project.toml，未运行检查" } });
-    return null;
+    const pending = withPending(null, await pendingCount(root));
+    return pending === null ? null : { systemMessage: pending };
   }
   const result = await endCheck({
     root, project, session, runner: runRole, signal: new AbortController().signal,
@@ -203,7 +205,8 @@ async function stop(root: string, input: HookInput): Promise<Output> {
     return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? undefined };
   }
   await chronicle(result.settled);
-  return result.report === null ? null : { systemMessage: result.report };
+  const report = withPending(result.report, await pendingCount(root));
+  return report === null ? null : { systemMessage: report };
 }
 
 async function postModelRequest(root: string, input: HookInput): Promise<void> {
