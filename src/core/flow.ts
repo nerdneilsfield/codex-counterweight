@@ -20,7 +20,7 @@ const MAX_CHECK_TIMEOUT_S = 3570;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const PROTECTED_REASON = (relative: string) => `[counterweight] ${relative} 是受保护路径`
-  + "（.cw/project.toml、.cw/ 下的宿主配置文件或项目配置 [protect].paths）；如需修改请由用户手动完成。";
+  + "（.cw/project.toml、.cw/goal.md、.cw/ 下的宿主配置文件或项目配置 [protect].paths）；如需修改请由用户手动完成。";
 
 const UNVERIFIABLE_REASON = (value: string) =>
   `[counterweight] 路径无法核对受保护集合（符号链接逃逸仓库或不可解析），已拒绝：${value}`;

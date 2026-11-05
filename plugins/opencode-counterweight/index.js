@@ -7885,23 +7885,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path9, value) {
-  return { type: "update", path: path9, value };
+function CreateUpdate(path10, value) {
+  return { type: "update", path: path10, value };
 }
-function CreateInsert(path9, value) {
-  return { type: "insert", path: path9, value };
+function CreateInsert(path10, value) {
+  return { type: "insert", path: path10, value };
 }
-function CreateDelete(path9) {
-  return { type: "delete", path: path9 };
+function CreateDelete(path10) {
+  return { type: "delete", path: path10 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path9, left, right) {
+function* FromObject17(path10, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path9, right);
+    return yield CreateUpdate(path10, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -7911,7 +7911,7 @@ function* FromObject17(path9, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path9}/${key}`, right[key]);
+    yield CreateInsert(`${path10}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -7920,52 +7920,52 @@ function* FromObject17(path9, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path9}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path10}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path9}/${key}`);
+    yield CreateDelete(`${path10}/${key}`);
   }
 }
-function* FromArray13(path9, left, right) {
+function* FromArray13(path10, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path9, right);
+    return yield CreateUpdate(path10, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path9}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path10}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path9}/${i}`, right[i]);
+    yield CreateInsert(`${path10}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path9}/${i}`);
+    yield CreateDelete(`${path10}/${i}`);
   }
 }
-function* FromTypedArray2(path9, left, right) {
+function* FromTypedArray2(path10, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path9}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path10}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path9, right);
+    return yield CreateUpdate(path10, right);
   }
 }
-function* FromUnknown(path9, left, right) {
+function* FromUnknown(path10, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path9, right);
+  yield CreateUpdate(path10, right);
 }
-function* FromValue4(path9, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path9, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path9, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path9, left, right) : yield* FromUnknown(path9, left, right);
+function* FromValue4(path10, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path10, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path10, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path10, left, right) : yield* FromUnknown(path10, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8975,9 +8975,10 @@ ${plan}`;
 // src/core/protect.ts
 import path5 from "node:path";
 var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
+var GOAL_FILE = ".cw/goal.md";
 function isProtected(relative, patterns) {
   const normalized = relative.split(path5.sep).join("/");
-  if (CONFIG_FILES.includes(normalized)) return true;
+  if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
@@ -9250,7 +9251,7 @@ ${body.slice(0, 200)}`;
 // src/core/flow.ts
 var MAX_CHECK_TIMEOUT_S = 3570;
 var message = (error) => error instanceof Error ? error.message : String(error);
-var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/ \u4E0B\u7684\u5BBF\u4E3B\u914D\u7F6E\u6587\u4EF6\u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
+var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/goal.md\u3001.cw/ \u4E0B\u7684\u5BBF\u4E3B\u914D\u7F6E\u6587\u4EF6\u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
 var UNVERIFIABLE_REASON = (value) => `[counterweight] \u8DEF\u5F84\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF08\u7B26\u53F7\u94FE\u63A5\u9003\u9038\u4ED3\u5E93\u6216\u4E0D\u53EF\u89E3\u6790\uFF09\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${value}`;
 async function checkPaths(root, cwd, project, paths) {
   try {
@@ -9420,6 +9421,10 @@ async function pausePlan(params) {
   }
 }
 
+// src/core/goal.ts
+import { readFile as readFile3 } from "node:fs/promises";
+import path9 from "node:path";
+
 // src/roles/explorer.md
 var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
 
@@ -9454,6 +9459,21 @@ var REVIEW_PARAGRAPH = `When a chunk of the change is done, call cw_review and c
 var CHRONICLE_PARAGRAPH = `After a stage result lands (a commit, a decision, a finished sub-agent task), report it to cw_chronicle in a few sentences with dates and commit ids. Pass on what sub-agents found. If it replies with ASK, answer the questions and report again. Skip it when the role is not configured.`;
 var FORCED_REVIEW = `Counterweight runs cw_review and cw_over_review itself when you finish a turn. Do not call them yourself. If it hands you their findings, fix what is wrong or say why it is not.`;
 var FORCED_CHRONICLE = `Counterweight reports each finished turn to the historian itself. Call cw_chronicle only for a stage result it cannot see, such as a decision or a sub-agent finding.`;
+var GOAL_CAP = 4e3;
+function goalPart(goal) {
+  if (goal === null || goal.trim() === "") return null;
+  const body = goal.length > GOAL_CAP ? `${goal.slice(0, GOAL_CAP)}
+\u2026\uFF08\u8D85\u51FA ${GOAL_CAP} \u5B57\u7B26\uFF0C\u5DF2\u622A\u65AD\uFF09` : goal;
+  return `The user wrote this goal. Stay inside it. Do not widen it, and do not edit .cw/goal.md.
+
+${body}`;
+}
+function withGoal(section, goal) {
+  const part = goalPart(goal);
+  return part === null ? section : `${section}
+
+${part}`;
+}
 function sessionSection(auto) {
   return `You are a sharp INTJ engineer. You know software, research, and how systems actually fail. Talk like someone worth arguing with: adult, precise, interested. Not support, not a manual, not a teacher, not a parent, not an acceptance board.
 
@@ -9478,6 +9498,16 @@ ${auto.review ? FORCED_REVIEW : REVIEW_PARAGRAPH}
 ${auto.chronicle ? FORCED_CHRONICLE : CHRONICLE_PARAGRAPH}
 
 Stop when the current question is answered. Do not ask whether to continue.`;
+}
+
+// src/core/goal.ts
+async function readGoal(repo) {
+  if (repo === null) return null;
+  try {
+    return await readFile3(path9.join(repo, GOAL_FILE), "utf8");
+  } catch {
+    return null;
+  }
 }
 
 // src/adapters/codex/patch.ts
@@ -9643,7 +9673,10 @@ async function setupPlugin(ctx) {
     }
     if (await isChild(event.sessionID)) return;
     const project = await load().catch(() => null);
-    event.system.push({ type: "text", text: sessionSection(project?.auto ?? { review: false, chronicle: false }) });
+    event.system.push({
+      type: "text",
+      text: withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), await readGoal(root))
+    });
   });
   await ctx.session.hook("prompt", (event) => {
     if (roleSessions.has(event.sessionID)) return;

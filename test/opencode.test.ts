@@ -222,7 +222,7 @@ describe("end of turn", () => {
   });
 });
 
-describe("commands for over_review", () => {
+describe("commands and goal", () => {
   const before = (fake: Awaited<ReturnType<typeof start>>, tool: string, input: Record<string, unknown>, sessionID = "root") =>
     fake.fire("execute.before", { tool, sessionID, input });
   const idle = (fake: Awaited<ReturnType<typeof start>>) => fake.fire("experimental.idle", { sessionID: "root", background: [] });
@@ -260,6 +260,26 @@ describe("commands for over_review", () => {
     expect(fake.synthetic).toHaveLength(1);
     expect(fake.synthetic[0]!.text).toContain("原样转告");
     expect(fake.synthetic[0]!.text).toContain("自动审查有发现，不再续跑");
+  });
+
+  it("protects goal.md and pushes it for root sessions only", async () => {
+    await project("version = 1\n");
+    await mkdir(path.join(repo, ".cw"), { recursive: true });
+    await writeFile(path.join(repo, ".cw/goal.md"), "只改绑定的释放顺序");
+    const fake = await start();
+    await expect(before(fake, "edit", { path: ".cw/goal.md" })).rejects.toThrow("受保护路径");
+    const root: any[] = [];
+    await fake.fire("context", { sessionID: "root", model: model("prov", "m"), system: root });
+    expect(root[0].text).toContain("INTJ");
+    expect(root[0].text).toContain("只改绑定的释放顺序");
+    await writeFile(path.join(repo, ".cw/goal.md"), "改成别的");
+    const again: any[] = [];
+    await fake.fire("context", { sessionID: "root", model: model("prov", "m"), system: again });
+    expect(again[0].text).toContain("改成别的");
+    fake.sessions.set("sub", { parentID: "root", prompts: [], interrupted: false });
+    const child: any[] = [];
+    await fake.fire("context", { sessionID: "sub", model: model("prov", "m"), system: child });
+    expect(child).toEqual([]);
   });
 });
 

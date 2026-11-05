@@ -104,3 +104,24 @@ export async function loadActions(session: string, turn: string): Promise<Action
     return [];
   }
 }
+
+/** 上次注入的目标的哈希；没有记录时为 null。 */
+export async function loadGoalHash(session: string): Promise<string | null> {
+  try {
+    const dir = sessionDir(session);
+    return dir === null ? null : await readFile(path.join(dir, "goal.sha256"), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+export async function saveGoalHash(session: string, hash: string): Promise<void> {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null) return;
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "goal.sha256"), hash);
+  } catch {
+    // Without a stored hash the next prompt re-injects the goal, which is harmless.
+  }
+}

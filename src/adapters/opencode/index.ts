@@ -5,12 +5,13 @@
 import type { ActionRecord } from "../../core/auto.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { checkPaths, endCheck, pausePlan } from "../../core/flow.js";
+import { readGoal } from "../../core/goal.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
 import { renderTranscript } from "../../core/pause.js";
 import type { Claim } from "../../core/turnstate.js";
-import { rolePrompt, sessionSection, type RoleName } from "../../roles/prompts.js";
+import { rolePrompt, sessionSection, withGoal, type RoleName } from "../../roles/prompts.js";
 import { callRole, ROLES, toolInputSchema } from "../../roles/tools.js";
 import { patchPaths } from "../codex/patch.js";
 import { makeRunner, type SessionApi } from "./runner.js";
@@ -96,7 +97,10 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
     }
     if (await isChild(event.sessionID)) return;
     const project = await load().catch(() => null);
-    event.system.push({ type: "text", text: sessionSection(project?.auto ?? { review: false, chronicle: false }) });
+    event.system.push({
+      type: "text",
+      text: withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), await readGoal(root)),
+    });
   });
 
   await ctx.session.hook("prompt", (event) => {

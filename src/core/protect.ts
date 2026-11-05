@@ -1,5 +1,5 @@
 /**
- * 受保护路径：项目配置里写死的路径列表，外加 harness 自己的控制面文件 `.cw/project.toml`、`.cw/codex.toml`、`.cw/claude.toml` 和 `.cw/opencode.toml`。
+ * 受保护路径：项目配置里写死的路径列表，外加 harness 自己的控制面文件 `.cw/project.toml`、`.cw/codex.toml`、`.cw/claude.toml` 和 `.cw/opencode.toml`，以及用户写的 `.cw/goal.md`。
  * `edit` / `write` 对受保护目标直接拦截。没有内容快照、没有结算时的变化报告。
  *
  * Protected paths: the literal list from the project config plus the harness's
@@ -18,6 +18,9 @@ import path from "node:path";
  */
 const CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
 
+/** 用户写的目标。模型不能改它：改了之后，注入进提示的约束就由模型自己定义了。 */
+export const GOAL_FILE = ".cw/goal.md";
+
 /**
  * 判断一个仓库内相对路径是否属于受保护集合：等于某条路径，或位于某条目录前缀之下。
  *
@@ -30,6 +33,6 @@ const CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", "
  */
 export function isProtected(relative: string, patterns: readonly string[]): boolean {
   const normalized = relative.split(path.sep).join("/");
-  if (CONFIG_FILES.includes(normalized)) return true;
+  if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }

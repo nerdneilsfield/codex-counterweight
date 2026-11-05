@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-[![Version](https://img.shields.io/badge/version-0.2.1-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
 [![License: MIT](https://img.shields.io/github/license/nerdneilsfield/codex-counterweight)](LICENSE)
 [![Tested with Codex CLI 0.166.0](https://img.shields.io/badge/tested%20with-Codex%20CLI%200.166.0-412991)](https://github.com/openai/codex/releases/tag/rust-v0.166.0)
 [![Tested with Claude Code 2.1.318](https://img.shields.io/badge/tested%20with-Claude%20Code%202.1.318-D97757)](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.318)
@@ -163,7 +163,16 @@ grep '"event":"check"' .cw/meter.jsonl
 
 ### 受保护路径
 
-配置加载成功后，`.cw/project.toml`、`.cw/codex.toml`、`.cw/claude.toml` 和 `.cw/opencode.toml` 在所有宿主上总是受保护。只要调用中有一个路径受保护、通过符号链接指向受保护路径，或位于仓库之外，插件就拒绝整个调用。解析不出路径的调用也会被拒绝。
+配置加载成功后，`.cw/project.toml`、`.cw/goal.md`、`.cw/codex.toml`、`.cw/claude.toml` 和 `.cw/opencode.toml` 在所有宿主上总是受保护。只要调用中有一个路径受保护、通过符号链接指向受保护路径，或位于仓库之外，插件就拒绝整个调用。解析不出路径的调用也会被拒绝。
+
+### 目标文件
+
+`.cw/goal.md` 放你亲手写的目标。文件存在且不是空白时，插件把它附在注入的约束后面，并要求模型待在这个目标之内、不要扩大它。超过 4000 字符的部分会被截掉，并注明截断。这个文件总是受保护，模型改不了约束它的目标。没有这个文件时，什么也不加。只有顶层会话会收到目标，角色子进程和 OpenCode 的子会话收不到。
+
+修改多久后生效，取决于宿主：
+
+- OpenCode 在顶层会话的每次模型调用时读取文件，所以修改从下一次调用开始生效。
+- Codex 和 Claude Code 在会话开始、`/clear` 和压缩时注入目标。之后每次提交请求时，插件把文件与上次注入的版本比较。文件变了，就把新目标追加到上下文；文件被删除，就告诉模型之前的目标不再适用；文件没变，什么也不加，上下文不会每轮增长。旧版本仍留在对话历史里，新版本排在它后面。
 
 ## 配置
 
@@ -353,7 +362,7 @@ OpenCode：
 | OpenCode 上回合结束时什么也没出现 | OpenCode 在检查通过时什么也不显示 | 在 `.cw/meter.jsonl` 里找 `check` 事件。找不到时，确认 `.cw/project.toml` 有 `[check]` 小节，并确认插件已安装。 |
 | 报告显示 `配置非法` | `.cw/` 下的文件有未知字段或非法值 | 按消息里的字段名修改。 |
 | 模型改不了受保护路径下的文件 | 路径命中了 `protect.paths` | 自己修改该文件，或调整 `protect.paths`。 |
-| 模型改不了 `.cw/` 下的文件 | `project.toml` 和三个宿主文件总是受保护 | 自己修改。 |
+| 模型改不了 `.cw/` 下的文件 | `project.toml`、`goal.md` 和三个宿主文件总是受保护 | 自己修改。 |
 | 角色工具报告 `未配置 [models].<role>` | 该角色没有配置模型 | 在你的宿主文件的 `[models]` 里添加。 |
 | Codex 上角色读不了文件 | 这台机器上 Codex 沙箱无法启动 | 检查 `kernel.apparmor_restrict_unprivileged_userns`，或设置 `roles.sandbox = "none"`。 |
 | 角色报告 `未正常结束` | 角色的回合没有完成 | 查看消息里的原因，然后重新调用工具。 |

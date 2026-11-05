@@ -261,6 +261,54 @@ describe("commands for over_review", () => {
   });
 });
 
+describe("goal", () => {
+  const goalFile = () => path.join(repo, ".cw/goal.md");
+  const prompt = (text = "hi") => runHook({ hook_event_name: "UserPromptSubmit", prompt: text });
+  const saved = () => readFile(path.join(sandbox.data, "sessions/s1/t1.prompt"), "utf8");
+
+  beforeEach(async () => {
+    await writeConfig("version = 1\n");
+    await mkdir(path.join(repo, ".cw"), { recursive: true });
+  });
+
+  it("is protected", async () => {
+    expect(denied((await preTool(patch("*** Update File: .cw/goal.md", "@@"))).out)).toBe(true);
+  });
+
+  it("is injected at SessionStart, then only when it changes or is removed", async () => {
+    await writeFile(goalFile(), "只改绑定的释放顺序");
+    const start = await runHook({ hook_event_name: "SessionStart" });
+    expect(start.out.hookSpecificOutput.additionalContext).toContain("INTJ");
+    expect(start.out.hookSpecificOutput.additionalContext).toContain("只改绑定的释放顺序");
+
+    expect((await prompt("one")).stdout).toBe("");
+    expect(await saved()).toBe("one");
+
+    await writeFile(goalFile(), "只改解析器");
+    const changed = await prompt("two");
+    const context = changed.out.hookSpecificOutput.additionalContext as string;
+    expect(changed.out.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(context).toContain("只改解析器");
+    expect(context).not.toContain("INTJ");
+    expect(await saved()).toBe("two");
+    expect((await prompt("three")).stdout).toBe("");
+
+    await rm(goalFile());
+    const removed = await prompt("four");
+    expect(removed.out.hookSpecificOutput.additionalContext)
+      .toBe("The user removed .cw/goal.md. The earlier goal no longer applies.");
+    expect(await saved()).toBe("four");
+    expect((await prompt("five")).stdout).toBe("");
+  });
+
+  it("treats a missing stored hash as changed only when a goal exists", async () => {
+    expect((await prompt()).stdout).toBe("");
+    await writeFile(goalFile(), "目标");
+    await rm(path.join(sandbox.data, "sessions"), { recursive: true, force: true });
+    expect((await prompt()).out.hookSpecificOutput.additionalContext).toContain("目标");
+  });
+});
+
 describe("PAUSE", () => {
   let transcript: string;
   const line = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });

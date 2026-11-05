@@ -1,6 +1,6 @@
 {
   "name": "counterweight",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Run the project's check at the end of each turn, guard protected paths, and record model usage.",
   "license": "MIT",
   "repository": "https://github.com/nerdneilsfield/codex-counterweight",

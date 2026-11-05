@@ -122,7 +122,7 @@ describe("auto review", () => {
   });
 });
 
-describe("commands for over_review", () => {
+describe("commands and goal", () => {
   it("records Bash for over_review but not a blocked edit", async () => {
     await project('version = 1\n[protect]\npaths = ["tests"]\n[auto]\nreview = true\n');
     await writeConfig(repo, "claude.toml", '[models]\nreview = "rv"\nover_review = "ov"\n');
@@ -139,6 +139,23 @@ describe("commands for over_review", () => {
     const calls = await fakeCalls(sandbox);
     expect(calls).toHaveLength(1);
     expect(calls[0]!.stdin).toContain("bash make all");
+  });
+
+  it("protects goal.md, injects it at SessionStart, and returns it only when it changes", async () => {
+    await project("version = 1\n");
+    expect(denied((await edit(".cw/goal.md")).out)).toBe(true);
+    await writeFile(path.join(repo, ".cw/goal.md"), "目标一");
+    const start = await hook({ hook_event_name: "SessionStart" });
+    expect(start.out.hookSpecificOutput.additionalContext).toContain("目标一");
+    expect((await hook({ hook_event_name: "UserPromptSubmit", prompt: "a" })).stdout).toBe("");
+    await writeFile(path.join(repo, ".cw/goal.md"), "目标二");
+    const changed = await hook({ hook_event_name: "UserPromptSubmit", prompt: "b" });
+    expect(changed.out.hookSpecificOutput).toMatchObject({ hookEventName: "UserPromptSubmit" });
+    expect(changed.out.hookSpecificOutput.additionalContext).toContain("目标二");
+    expect(await readFile(path.join(sandbox.data, "sessions/s1/p1.prompt"), "utf8")).toBe("b");
+    await rm(path.join(repo, ".cw/goal.md"));
+    expect((await hook({ hook_event_name: "UserPromptSubmit", prompt: "c" })).out.hookSpecificOutput.additionalContext)
+      .toBe("The user removed .cw/goal.md. The earlier goal no longer applies.");
   });
 });
 

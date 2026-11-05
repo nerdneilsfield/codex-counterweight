@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-[![Version](https://img.shields.io/badge/version-0.2.1-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/version-0.3.0-blue)](plugins/codex-counterweight/.codex-plugin/plugin.json)
 [![License: MIT](https://img.shields.io/github/license/nerdneilsfield/codex-counterweight)](LICENSE)
 [![Tested with Codex CLI 0.166.0](https://img.shields.io/badge/tested%20with-Codex%20CLI%200.166.0-412991)](https://github.com/openai/codex/releases/tag/rust-v0.166.0)
 [![Tested with Claude Code 2.1.318](https://img.shields.io/badge/tested%20with-Claude%20Code%202.1.318-D97757)](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.318)
@@ -163,7 +163,16 @@ A check that exceeds its timeout counts as a failure. The plugin sends `SIGTERM`
 
 ### Protected paths
 
-`.cw/project.toml`, `.cw/codex.toml`, `.cw/claude.toml`, and `.cw/opencode.toml` are always protected once configuration loads, on every host. The plugin rejects the whole call if any path in it is protected, resolves through a symbolic link to a protected path, or is outside the repository. A call whose paths cannot be parsed is also rejected.
+`.cw/project.toml`, `.cw/goal.md`, `.cw/codex.toml`, `.cw/claude.toml`, and `.cw/opencode.toml` are always protected once configuration loads, on every host. The plugin rejects the whole call if any path in it is protected, resolves through a symbolic link to a protected path, or is outside the repository. A call whose paths cannot be parsed is also rejected.
+
+### Goal file
+
+`.cw/goal.md` holds a goal in your own words. When the file exists and is not blank, the plugin appends it to the injected instructions with a request to stay inside the goal and not widen it. Text beyond 4,000 characters is cut off, and the cut is marked. The file is always protected, so the model cannot edit the goal it is held to. Without the file, nothing is added. Only top-level sessions receive the goal. Role subprocesses and OpenCode child sessions do not.
+
+How soon an edit takes effect depends on the host:
+
+- OpenCode reads the file at every model call of a top-level session, so an edit applies to the next call.
+- Codex and Claude Code inject the goal at session start, `/clear`, and compaction. At each later prompt, the plugin compares the file with the version it injected last. If the file changed, it appends the new goal to the context. If you deleted the file, it tells the model that the earlier goal no longer applies. If the file did not change, it adds nothing, so the context does not grow every turn. The earlier version stays in the conversation history, followed by the newer one.
 
 ## Configuration
 
@@ -353,7 +362,7 @@ OpenCode:
 | Nothing appears at the end of a turn on OpenCode | OpenCode shows nothing for a passing check | Look for a `check` event in `.cw/meter.jsonl`. If there is none, confirm that `.cw/project.toml` has a `[check]` section and that the plugin is installed. |
 | The report says `配置非法` | A file under `.cw/` has an unknown key or an invalid value | Fix the key named in the message. |
 | The model cannot edit a file under a protected path | The path matches `protect.paths` | Edit the file yourself, or change `protect.paths`. |
-| The model cannot edit a file under `.cw/` | `project.toml` and the three host files are always protected | Edit the file yourself. |
+| The model cannot edit a file under `.cw/` | `project.toml`, `goal.md`, and the three host files are always protected | Edit the file yourself. |
 | A role tool reports `未配置 [models].<role>` | The role has no model | Add the role to `[models]` in your host file. |
 | A role cannot read files on Codex | The Codex sandbox cannot start on this machine | Check `kernel.apparmor_restrict_unprivileged_userns`, or set `roles.sandbox = "none"`. |
 | A role reports `未正常结束` | The role's turn did not complete | Read the reason in the message and call the tool again. |

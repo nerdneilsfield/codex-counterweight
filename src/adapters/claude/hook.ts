@@ -10,8 +10,9 @@ import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
 import { renderTranscript } from "../../core/pause.js";
+import { goalUpdate, readGoal, rememberGoal } from "../../core/goal.js";
 import { claim, endSession, loadActions, loadPrompt, loadSeen, markSeen, recordAction, savePrompt } from "../../core/turnstate.js";
-import { sessionSection } from "../../roles/prompts.js";
+import { sessionSection, withGoal } from "../../roles/prompts.js";
 import { runRole } from "./runner.js";
 import { assistantUsage, parseTranscript } from "./transcript.js";
 
@@ -39,15 +40,13 @@ async function main(): Promise<void> {
   const root = await realpathOr(await repoToplevel(cwd) ?? cwd);
   let output: Output = null;
   switch (input.hook_event_name) {
-    case "SessionStart": output = await sessionStart(root); break;
+    case "SessionStart": output = await sessionStart(root, input.session_id ?? ""); break;
     case "PreToolUse": output = await preToolUse(root, cwd, input); break;
     case "Stop":
       await meter(root, input);
       output = await stop(root, input);
       break;
-    case "UserPromptSubmit":
-      await savePrompt(input.session_id ?? "", input.prompt_id ?? "", input.prompt ?? "").catch(() => {});
-      break;
+    case "UserPromptSubmit": output = await userPrompt(root, input); break;
     case "SessionEnd":
       await meter(root, input);
       await endSession(input.session_id ?? "").catch(() => {});
@@ -56,7 +55,14 @@ async function main(): Promise<void> {
   if (output !== null) process.stdout.write(`${JSON.stringify(output)}\n`);
 }
 
-async function sessionStart(root: string): Promise<Output> {
+async function userPrompt(root: string, input: HookInput): Promise<Output> {
+  const session = input.session_id ?? "";
+  await savePrompt(session, input.prompt_id ?? "", input.prompt ?? "").catch(() => {});
+  const additionalContext = await goalUpdate(root, session).catch(() => null);
+  return additionalContext === null ? null : { hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext } };
+}
+
+async function sessionStart(root: string, session: string): Promise<Output> {
   const notes: string[] = [];
   let project: ProjectConfig | null = null;
   try {
@@ -67,10 +73,12 @@ async function sessionStart(root: string): Promise<Output> {
   } catch (error) {
     notes.push(`[counterweight] 配置非法：${message(error)}`);
   }
+  const goal = await readGoal(root);
+  await rememberGoal(session, goal);
   const output: Record<string, unknown> = {
     hookSpecificOutput: {
       hookEventName: "SessionStart",
-      additionalContext: `${sessionSection(project?.auto ?? { review: false, chronicle: false })}\n\nCounterweight ${await pluginVersion()} active`,
+      additionalContext: `${withGoal(sessionSection(project?.auto ?? { review: false, chronicle: false }), goal)}\n\nCounterweight ${await pluginVersion()} active`,
     },
   };
   if (notes.length > 0) output.systemMessage = notes.join("\n");
