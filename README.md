@@ -25,6 +25,7 @@ It is the Codex, Claude Code, and OpenCode counterpart of [pi-counterweight](htt
 
 - [Requirements](#requirements)
 - [Quick start](#quick-start)
+- [Workflow](#workflow)
 - [Differences between hosts](#differences-between-hosts)
 - [What the plugin does](#what-the-plugin-does)
 - [Configuration](#configuration)
@@ -118,6 +119,59 @@ grep '"event":"check"' .cw/meter.jsonl
 A passing run has `"outcome":"passed"` in the line.
 
 To use the plugin in your own project, replace `cmd` with a command that exits on its own, such as `["npm", "test"]`. Each host also has a setup command that checks that the plugin is active and helps you write the file: `$cw-setup` in Codex, `/counterweight:cw-setup` in Claude Code, and `/cw-setup` in OpenCode. Claude Code namespaces the command with the plugin name.
+
+## Workflow
+
+You do not start a task, approve a plan, or run a repair command. You send a request as usual, and the plugin acts at fixed points in the turn.
+
+```text
+You send a request
+    |
+    v
+The model works
+    |   A write to a protected path is rejected.
+    |   With auto.pause, the first source edit is rejected once and returns a plan.
+    v
+The turn ends and the check runs
+    |-- Failed, first time    -> The model gets the output and continues.
+    |                            The check runs again when it stops.
+    |-- Cancelled by you      -> The turn ends with no result.
+    |-- Passed, or failed again
+    v
+Automatic runs, if enabled
+    |-- Findings and file changes, first time -> The model gets the findings
+    |                                            and continues.
+    |-- Findings, otherwise                   -> The findings are shown.
+    |-- No findings, files changed            -> The historian updates the history.
+    v
+The turn ends and you see the result
+```
+
+One user turn continues at most twice: once for the check and once for review findings. After that, the plugin reports what it found and the decision is yours.
+
+### Add features in stages
+
+Each stage works without the next one, so you can stop at any point. This order is a suggestion.
+
+| Stage | What you add | What you get |
+| --- | --- | --- |
+| 1 | `[check]` in `.cw/project.toml` | The check runs at the end of each turn, and the model gets one repair turn. |
+| 2 | `[protect]` and `.cw/goal.md` | The model cannot patch the paths you list, and it receives your goal. |
+| 3 | `[models]` in the host file | The model can call the role tools when it decides to. |
+| 4 | `[auto]` in `.cw/project.toml` | The plugin runs reviews, history updates, and PAUSE without waiting for the model. |
+
+Stage 4 adds a model call to each turn that changes files, so start with one key and read `.cw/meter.jsonl` to see what it costs.
+
+### Work with a goal
+
+Before a larger task, write the scope in `.cw/goal.md`, for example `Only change the release order of the binding. Do not touch the public API.` The goal limits the work. It does not start any work, so you still send the request. Edit the file yourself when the scope changes, and delete it when the task is finished. The model cannot edit it.
+
+### Read the result
+
+- A `[counterweight]` line appears at the end of each turn when `[check]` is set. If the line is missing, the check did not run. OpenCode is the exception: a passing check shows nothing there, so read `.cw/meter.jsonl`.
+- A report that says the check failed and will not retry means that the repair turn did not fix it. Send a new request, or fix the problem yourself. A new request gets a new repair turn.
+- Review findings are reports, not verdicts. The model fixes them or explains why it does not, and they never change the check result.
+- `.cw/meter.jsonl` records usage, checks, role calls, and PAUSE decisions. `.cw/HISTORY.md` holds the project history that the historian writes.
 
 ## Differences between hosts
 
