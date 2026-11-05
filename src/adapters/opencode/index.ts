@@ -2,6 +2,7 @@
  * OpenCode v2 插件：进程内运行，没有一次性 hook 进程，回合状态放在内存里。
  * OpenCode 没有给插件向用户显示文字的通道，所以检查通过时什么也不显示，只写 `.cw/meter.jsonl`。
  */
+import type { ActionRecord } from "../../core/auto.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
 import { checkPaths, endCheck, pausePlan } from "../../core/flow.js";
 import { repoToplevel } from "../../core/gitstate.js";
@@ -30,7 +31,7 @@ export interface Ctx {
   event: { subscribe(options?: { types?: string[]; signal?: AbortSignal }): AsyncIterable<any> };
 }
 
-interface Turn { repair: boolean; findings: boolean; pause: boolean; relayed: boolean; prompt: string }
+interface Turn { repair: boolean; findings: boolean; pause: boolean; relayed: boolean; prompt: string; actions: ActionRecord[] }
 
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
@@ -51,7 +52,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
   const turnOf = (sessionID: string): Turn => {
     let turn = turns.get(sessionID);
     if (turn === undefined) {
-      turn = { repair: false, findings: false, pause: false, relayed: false, prompt: "" };
+      turn = { repair: false, findings: false, pause: false, relayed: false, prompt: "", actions: [] };
       turns.set(sessionID, turn);
     }
     return turn;
@@ -100,10 +101,18 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
 
   await ctx.session.hook("prompt", (event) => {
     if (roleSessions.has(event.sessionID)) return;
-    turns.set(event.sessionID, { repair: false, findings: false, pause: false, relayed: false, prompt: event.prompt?.text ?? "" });
+    turns.set(event.sessionID, { repair: false, findings: false, pause: false, relayed: false, prompt: event.prompt?.text ?? "", actions: [] });
   });
 
   await ctx.tool.hook("execute.before", async (event) => {
+    // 根会话的 shell 命令只记录，不过保护和 PAUSE。
+    if (event.tool === "shell") {
+      const command = (event.input as Record<string, unknown> | undefined)?.command;
+      if (typeof command === "string" && command !== "" && !(await isChild(event.sessionID))) {
+        turnOf(event.sessionID).actions.push({ tool: "bash", detail: command });
+      }
+      return;
+    }
     if (event.tool !== "write" && event.tool !== "edit" && event.tool !== "patch") return;
     let project: ProjectConfig | null;
     try {
@@ -132,6 +141,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
     } finally {
       tracked.done();
     }
+    for (const file of paths) turnOf(event.sessionID).actions.push({ tool: event.tool, detail: file });
   });
 
   await ctx.session.hook("experimental.idle", async (event) => {
@@ -148,6 +158,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
         result = await endCheck({
           root, project, session: sessionID, runner: makeRunner(ctx.session, sessionID, roleSessions),
           signal: tracked.signal, claim: claimFor(sessionID), prompt: async () => turn.prompt,
+          actions: async () => turn.actions,
         });
       } catch (error) {
         result = { continueWith: null, report: `[counterweight] 配置非法，未运行检查：${message(error)}`, attention: true };

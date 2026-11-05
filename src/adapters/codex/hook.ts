@@ -10,7 +10,7 @@ import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
 import { renderTranscript } from "../../core/pause.js";
-import { claim, endSession, loadPrompt, savePrompt } from "../../core/turnstate.js";
+import { claim, endSession, loadActions, loadPrompt, recordAction, savePrompt } from "../../core/turnstate.js";
 import { sessionSection } from "../../roles/prompts.js";
 import { patchPaths } from "./patch.js";
 import { runRole } from "./runner.js";
@@ -22,6 +22,7 @@ interface HookInput {
   session_id?: string;
   model?: string;
   turn_id?: string;
+  tool_name?: string;
   prompt?: string;
   agent_id?: string;
   transcript_path?: string;
@@ -91,6 +92,8 @@ async function pluginVersion(): Promise<string> {
   }
 }
 
+const SHELL_TOOLS = new Set(["Bash", "exec_command", "shell_command"]);
+
 const deny = (reason: string): Output => ({
   hookSpecificOutput: {
     hookEventName: "PreToolUse",
@@ -108,20 +111,30 @@ async function preToolUse(root: string, cwd: string, input: HookInput): Promise<
   }
   if (project === null) return null;
   const command = input.tool_input?.command;
+  const session = input.session_id ?? "";
+  const turn = input.turn_id ?? "";
+  // 根线程的 shell 命令只记录，不过保护和 PAUSE。
+  if (input.tool_name !== undefined && SHELL_TOOLS.has(input.tool_name)) {
+    if (input.agent_id === undefined && typeof command === "string" && command !== "") {
+      await recordAction(session, turn, { tool: "bash", detail: command });
+    }
+    return null;
+  }
   const paths = typeof command === "string" ? patchPaths(command) : [];
   const refusal = await checkPaths(root, cwd, project, paths);
   if (refusal !== null) return deny(refusal);
-  // PAUSE 只在根线程拦。
+  // PAUSE 只在根线程拦；子代理的调用也不记。
   if (input.agent_id !== undefined) return null;
-  const session = input.session_id ?? "";
   const plan = await pausePlan({
     root, cwd: await realpathOr(cwd), project, session, paths,
     tool: "apply_patch", input: { command },
     runner: runRole, signal: new AbortController().signal,
-    claim: () => claim(session, input.turn_id ?? "", "pause"),
+    claim: () => claim(session, turn, "pause"),
     transcript: async () => renderTranscript(parseTranscript(await readFile(input.transcript_path ?? "", "utf8"))),
   });
-  return plan === null ? null : deny(plan);
+  if (plan !== null) return deny(plan);
+  for (const target of paths) await recordAction(session, turn, { tool: "apply_patch", detail: target });
+  return null;
 }
 
 async function stop(root: string, input: HookInput): Promise<Output> {
@@ -138,6 +151,7 @@ async function stop(root: string, input: HookInput): Promise<Output> {
     root, project, session, runner: runRole, signal: new AbortController().signal,
     claim: (name) => claim(session, turn, name),
     prompt: () => loadPrompt(session, turn),
+    actions: () => loadActions(session, turn),
   });
   if (result.continueWith !== null) {
     return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? undefined };

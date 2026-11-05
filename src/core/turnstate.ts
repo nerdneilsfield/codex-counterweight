@@ -4,6 +4,7 @@
  */
 import { appendFile, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { ActionRecord } from "./auto.js";
 
 export type Claim = "repair" | "findings" | "pause";
 
@@ -68,4 +69,38 @@ export async function markSeen(session: string, id: string): Promise<void> {
 export async function endSession(session: string): Promise<void> {
   const dir = sessionDir(session);
   if (dir !== null) await rm(dir, { recursive: true, force: true });
+}
+
+/** 本回合的一条动作，追加成 `<turn>.actions` 的一行 JSON。写失败不影响工具调用。 */
+export async function recordAction(session: string, turn: string, action: ActionRecord): Promise<void> {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
+    await mkdir(dir, { recursive: true });
+    await appendFile(path.join(dir, `${turn}.actions`), `${JSON.stringify(action)}\n`);
+  } catch {
+    // Observational only.
+  }
+}
+
+/** 读不到时用空数组；坏行跳过。 */
+export async function loadActions(session: string, turn: string): Promise<ActionRecord[]> {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return [];
+    const actions: ActionRecord[] = [];
+    for (const line of (await readFile(path.join(dir, `${turn}.actions`), "utf8")).split("\n")) {
+      try {
+        const value = JSON.parse(line) as Partial<ActionRecord> | null;
+        if (typeof value?.tool === "string" && typeof value.detail === "string") {
+          actions.push({ tool: value.tool, detail: value.detail });
+        }
+      } catch {
+        // A torn or malformed line.
+      }
+    }
+    return actions;
+  } catch {
+    return [];
+  }
 }

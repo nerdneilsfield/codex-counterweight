@@ -8538,6 +8538,31 @@ function git(repo, args) {
 
 // src/core/auto.ts
 var DIFF_CAP = 8e4;
+var ACTION_CAP = 40;
+var ACTION_DETAIL_CAP = 2e3;
+function renderActions(actions) {
+  if (actions.length === 0) return "";
+  const shown = [];
+  let omitted = 0;
+  for (const action of actions) {
+    const isWrite = action.tool !== "bash" && action.tool !== "powershell";
+    if (isWrite && actions.length - omitted > ACTION_CAP) {
+      omitted += 1;
+      continue;
+    }
+    if (shown.length >= ACTION_CAP || action.detail.length > ACTION_DETAIL_CAP) {
+      omitted += 1;
+      continue;
+    }
+    shown.push(`${shown.length + 1}. ${action.tool} ${action.detail}`);
+  }
+  const rest = omitted > 0 ? `
+\uFF08\u53E6\u6709 ${omitted} \u6761\u672A\u5217\u51FA\uFF09` : "";
+  return `
+\u672C\u56DE\u5408\u7684\u5DE5\u5177\u8C03\u7528\uFF08\u4E0D\u662F\u6267\u884C\u7ED3\u679C\uFF0C\u5171 ${actions.length} \u6761\uFF09\uFF1A
+${shown.join("\n")}${rest}
+`;
+}
 async function workingDiff(repo) {
   const run = async (args) => {
     try {
@@ -9030,7 +9055,7 @@ ${params.request}
 
 diff\uFF1A
 ${params.diff}
-`;
+${params.actions ?? ""}`;
 }
 async function runAndMeter(ctx, role, tool, model, message3, signal, askedS) {
   const { repo, session } = ctx;
@@ -9235,28 +9260,37 @@ async function runAuto(params, checkLine) {
   try {
     if (!project.auto.review && !project.auto.chronicle) return none;
     const diff = await workingDiff(root);
-    if (diff === null || diff.trim() === "") return none;
+    const changed = diff !== null && diff.trim() !== "";
+    const actions = renderActions(await params.actions());
+    const plan = {
+      review: project.auto.review && changed,
+      overReview: project.auto.review && (changed || actions !== ""),
+      chronicle: project.auto.chronicle && changed
+    };
+    if (!plan.review && !plan.overReview && !plan.chronicle) return none;
     const ctx = { repo: root, session, project, runner: params.runner };
-    if (project.auto.review) {
-      const body = reviewMessage({ request: await params.prompt(), diff });
+    const request = await params.prompt();
+    if (plan.review || plan.overReview) {
+      const empty = Promise.resolve({ answer: null });
       const [correct, over] = await Promise.all([
-        runAndMeter(ctx, "review", "cw_review", project.models.review, body, signal),
-        runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review, body, signal)
+        plan.review ? runAndMeter(ctx, "review", "cw_review", project.models.review, reviewMessage({ request, diff: diff ?? "" }), signal) : empty,
+        plan.overReview ? runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review, reviewMessage({ request, diff: diff ?? "", actions }), signal) : empty
       ]);
       const findings = [correct, over].map((run) => run.answer?.trim() ?? "").filter((answer) => answer !== "" && answer !== "none" && !answer.startsWith("ASK:"));
       if (findings.length > 0) {
-        if (await params.claim("findings")) {
+        const first = await params.claim("findings");
+        if (changed && first) {
           return { text: null, findings: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u5904\u7406\u6216\u8BF4\u660E\u4E3A\u4EC0\u4E48\u4E0D\u5904\u7406\uFF1A
 
 ${findings.join("\n\n")}` };
         }
-        return { text: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\uFF08\u7EED\u8DD1\u4E4B\u540E\uFF09\u4ECD\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
+        return { text: `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u6709\u53D1\u73B0\uFF0C\u4E0D\u518D\u7EED\u8DD1\uFF1A
 
 ${findings.join("\n\n")}`, findings: null };
       }
     }
-    if (project.auto.chronicle) {
-      const report = chronicleReport(await params.prompt(), changedFiles(diff), checkLine);
+    if (plan.chronicle) {
+      const report = chronicleReport(request, changedFiles(diff), checkLine);
       await chronicle(ctx, project.models.historian, report, signal);
     }
     return none;
@@ -9354,6 +9388,35 @@ async function endSession(session) {
   const dir = sessionDir(session);
   if (dir !== null) await (0, import_promises8.rm)(dir, { recursive: true, force: true });
 }
+async function recordAction(session, turn, action) {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
+    await (0, import_promises8.mkdir)(dir, { recursive: true });
+    await (0, import_promises8.appendFile)(import_node_path9.default.join(dir, `${turn}.actions`), `${JSON.stringify(action)}
+`);
+  } catch {
+  }
+}
+async function loadActions(session, turn) {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return [];
+    const actions = [];
+    for (const line of (await (0, import_promises8.readFile)(import_node_path9.default.join(dir, `${turn}.actions`), "utf8")).split("\n")) {
+      try {
+        const value = JSON.parse(line);
+        if (typeof value?.tool === "string" && typeof value.detail === "string") {
+          actions.push({ tool: value.tool, detail: value.detail });
+        }
+      } catch {
+      }
+    }
+    return actions;
+  } catch {
+    return [];
+  }
+}
 
 // src/roles/explorer.md
 var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
@@ -9362,7 +9425,7 @@ var explorer_default = "You are a read-only code finder. You have read and grep.
 var historian_default = "You are the project historian. Read only. You keep one document: the development history of this repository.\n\nInput: the current document (it can be empty) and a report from the main agent. Fold the report into the document. Rewrite the whole document. Keep earlier entries unless the report corrects them. Use read and grep to check a claim when the repository can confirm it. Do not invent a date, a commit id, a number, or a cause. If the report does not give a fact and the repository cannot confirm it, leave it out.\n\nIf you cannot go on, reply with `ASK:` on the first line and your questions after it, and nothing else. Do this when only the main agent can settle the point: a missing date, an unknown cause or decision, or a conflict between the report and the repository. Do not write the document in that case.\n\nOtherwise reply with the full document and nothing else. The first line is a `# ` heading. Entries are in time order, newest last.\n\nLanguage: use the language of the current document. If it is empty, use the language of the report.\n\nThe two style guides below are targets, not limits. Stay as close to them as you can, but never drop a fact to satisfy a rule. Each entry must still carry what happened, when, who or what changed, why (when the report or repository says), and the evidence (commit, file, version). If a rule would force you to cut one of these, break the rule: split the sentence, add a sentence, or use a non-approved word and keep the meaning exact. Technical names, identifiers, and paths stay as they are.\n\nEnglish text follows ASD-STE100 (Simplified Technical English):\n- Use the approved words, each with its approved meaning only. Use one word for one thing.\n- Keep a sentence to 20 words or fewer in a procedure, 25 or fewer in a description.\n- One topic for each sentence. Six sentences or fewer in a paragraph.\n- Use the active voice. Use only the simple past, simple present, and simple future. Use the past for events.\n- Keep the articles (a, an, the). Do not use a gerund as a noun. Do not use a slang word or an idiom.\n\nChinese text follows the Xinhua news-agency dispatch style (\u65B0\u534E\u793E\u7535\u8BAF\u7A3F):\n- Each entry starts with a dateline: `\u65B0\u534E\u793E<\u4ED3\u5E93\u540D>X\u6708X\u65E5\u7535`. The date comes from the report or from the repository. Add the year when the entry is in another year.\n- The lead is one sentence: when, who, what was done, and the result. The rest follows in falling order of importance (\u5012\u91D1\u5B57\u5854).\n- Name the source with \u636E or \u8BF4, for example \u636E\u63D0\u4EA4\u8BB0\u5F55, \u636E\u6C47\u62A5. Give the commit, the version, and the file when you have them.\n- State facts. No praise, no \u91CD\u5927 or \u663E\u8457 type judgment, no exclamation mark, no colloquial or net slang.\n- Short sentences. One matter in a paragraph. Use Arabic numerals.\n- After the lead, add the background, the reason, the method, and the effect in as many short paragraphs as the facts need.\n";
 
 // src/roles/over-review.md
-var over_review_default = 'You decide what in this diff did not earn its place. Read only. Ignore the implementer\'s rationale. Look only at this diff, or at the paths you were given. Do not scan the repository. Do not edit. Do not review correctness.\n\nFor each addition, ask which of these is missing:\n\n- Process: a plan, an extra doc, or a session-only test that landed in the tree.\n- Complexity: an abstraction, dependency, config knob, fallback, retry, cache, or compatibility layer with no current caller, observed failure, or platform constraint.\n- Tests: a test with no independent oracle, or one that will not earn its future maintenance.\n- Knowledge: a comment or doc that repeats what the code or an existing doc already says.\n- Defense: a null check, fallback, retry, or second implementation added for a failure that has not happened and that sits on no trust boundary. A check stays when it guards user input, a process boundary, data loss, or authority.\n\n"Might need it later" is not a reason to keep it.\n\nDo not cut: trust-boundary checks, accessibility behavior, data-loss protection, a published contract, a CI-required check, or a test or compatibility layer the user explicitly asked to keep.\n\nDo not suggest a replacement design, a refactor, a lint rule, or a convention.\n\nIf you cannot judge without a fact only the main agent has, reply with `ASK:` on the first line and the questions after it, and nothing else. Do this when the request is too vague to say what the change was meant to do, or the diff cuts off the context you need and the paths you may read do not hold it. Do not ask what you can find with read or grep. Do not ask for a design choice.\n\nWrite Chinese. One cut per block:\n\nCUT `path:symbol`\n\u5220\uFF1A<what goes>\n\u7559\uFF1A<what stays>\n\u56E0\u4E3A\uFF1A<which of the five is missing>\n\nIf nothing qualifies, reply with exactly `none`.\n';
+var over_review_default = "You decide what in this diff did not earn its place. Read only. Ignore the implementer's rationale. Look only at this diff, the commands listed with it, or the paths you were given. Do not scan the repository. Do not edit. Do not review correctness.\n\nFor each addition, ask which of these is missing:\n\n- Process: a plan, an extra doc, or a session-only test that landed in the tree.\n- Complexity: an abstraction, dependency, config knob, fallback, retry, cache, or compatibility layer with no current caller, observed failure, or platform constraint.\n- Tests: a test with no independent oracle, or one that will not earn its future maintenance.\n- Knowledge: a comment or doc that repeats what the code or an existing doc already says.\n- Defense: a null check, fallback, retry, or second implementation added for a failure that has not happened and that sits on no trust boundary. A check stays when it guards user input, a process boundary, data loss, or authority.\n\n\"Might need it later\" is not a reason to keep it.\n\nThe input may list the turn's tool calls after the diff. Judge a command the same way as a line of code: it earns its place when it serves the request, including the reads, checks, and reruns needed to do the work. Report it only when nothing in the request calls for it. Reading, listing, and checking status are not findings. When one qualifies, write it as its own block with `CUT \\`command\\`` and the same three lines, and name the missing need in \u56E0\u4E3A. A command does not have to fit the five categories above.\n\nDo not cut: trust-boundary checks, accessibility behavior, data-loss protection, a published contract, a CI-required check, or a test or compatibility layer the user explicitly asked to keep.\n\nDo not suggest a replacement design, a refactor, a lint rule, or a convention.\n\nIf you cannot judge without a fact only the main agent has, reply with `ASK:` on the first line and the questions after it, and nothing else. Do this when the request is too vague to say what the change was meant to do, or the diff cuts off the context you need and the paths you may read do not hold it. Do not ask what you can find with read or grep. Do not ask for a design choice.\n\nWrite Chinese. One cut per block:\n\nCUT `path:symbol`\n\u5220\uFF1A<what goes>\n\u7559\uFF1A<what stays>\n\u56E0\u4E3A\uFF1A<which of the five is missing>\n\nIf nothing qualifies, reply with exactly `none`.\n";
 
 // src/roles/planner.md
 var planner_default = "You write one fix plan for a coding agent that is about to make its first edit to the repository. You have no tools. You cannot read files or run anything. Your input is the transcript of what the agent has done and seen so far, and the edit it is about to make.\n\nJudge from the transcript only. The agent has finished investigating; do not tell it to investigate again. If the transcript does not hold a fact you need, say so in one line under the plan instead of guessing.\n\nWrite the plan as four short parts, in this order:\n\n\u6839\u56E0\uFF1Awhat is actually wrong, and the evidence in the transcript that shows it.\n\u4F4D\u7F6E\uFF1Awhich files and symbols change, using only paths the transcript shows.\n\u505A\u6CD5\uFF1Ahow each change goes, in terms of behavior and contracts. No function bodies.\n\u7406\u7531\uFF1Awhy this approach over the nearest alternative the transcript makes plausible.\n\nIf the edit the agent is about to make does not match your plan, say which part differs and which one you think is right. The agent may disagree with you; it can see the code and you cannot.\n\nDo not review the agent's earlier work. Do not add steps for tests, docs, or hardening unless the transcript shows a failing check or an explicit requirement for them. Do not propose an abstraction, config, or fallback the transcript gives no reason for.\n\nWrite Chinese. Under 400 characters per part.\n";
@@ -9649,12 +9712,20 @@ async function preToolUse(root, cwd, input) {
     return null;
   }
   if (project === null) return null;
+  const session = input.session_id ?? "";
+  const turn = input.prompt_id ?? "";
+  if (input.tool_name === "Bash") {
+    const command = input.tool_input?.command;
+    if (input.agent_id === void 0 && typeof command === "string" && command !== "") {
+      await recordAction(session, turn, { tool: "bash", detail: command });
+    }
+    return null;
+  }
   const target = input.tool_input?.[input.tool_name === "NotebookEdit" ? "notebook_path" : "file_path"];
   const paths = typeof target === "string" && target !== "" ? [target] : [];
   const refusal = await checkPaths(root, cwd, project, paths);
   if (refusal !== null) return deny(refusal);
   if (input.agent_id !== void 0) return null;
-  const session = input.session_id ?? "";
   const plan = await pausePlan({
     root,
     cwd: await realpathOr(cwd),
@@ -9665,10 +9736,12 @@ async function preToolUse(root, cwd, input) {
     input: input.tool_input ?? {},
     runner: runRole,
     signal: new AbortController().signal,
-    claim: () => claim(session, input.prompt_id ?? "", "pause"),
+    claim: () => claim(session, turn, "pause"),
     transcript: async () => renderTranscript(parseTranscript(await (0, import_promises10.readFile)(input.transcript_path ?? "", "utf8")))
   });
-  return plan === null ? null : deny(plan);
+  if (plan !== null) return deny(plan);
+  for (const file of paths) await recordAction(session, turn, { tool: input.tool_name ?? "", detail: file });
+  return null;
 }
 async function stop(root, input) {
   let project;
@@ -9687,7 +9760,8 @@ async function stop(root, input) {
     runner: runRole,
     signal: new AbortController().signal,
     claim: (name) => claim(session, turn, name),
-    prompt: () => loadPrompt(session, turn)
+    prompt: () => loadPrompt(session, turn),
+    actions: () => loadActions(session, turn)
   });
   if (result.continueWith !== null) {
     return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? void 0 };

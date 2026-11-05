@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runRole } from "../src/adapters/codex/runner.js";
+import { renderActions } from "../src/core/auto.js";
 import { nextTimeoutS } from "../src/roles/run.js";
 import { alive, fakeCalls, installFakeCodex, until, type Sandbox } from "./support.js";
 
@@ -63,4 +64,25 @@ describe("runRole", () => {
     expect(nextTimeoutS(300_000)).toBe(600);
     expect(nextTimeoutS(1_800_000)).toBeNull();
   }, 20_000);
+});
+
+describe("renderActions", () => {
+  it("is empty for no actions", () => {
+    expect(renderActions([])).toBe("");
+  });
+
+  it("drops writes first past the cap, notes the omission, and skips an oversize command", () => {
+    const writes = Array.from({ length: 40 }, (_, i) => ({ tool: "Edit", detail: `f${i}.ts` }));
+    const text = renderActions([
+      ...writes,
+      { tool: "bash", detail: "npm test" },
+      { tool: "bash", detail: "x".repeat(2_001) },
+    ]);
+    expect(text).toContain("共 42 条");
+    expect(text).toContain("npm test");
+    expect(text).not.toContain("xxxx");
+    expect(text).not.toContain("f0.ts");
+    expect(text).toContain("f39.ts");
+    expect(text).toContain("（另有 3 条未列出）");
+  });
 });

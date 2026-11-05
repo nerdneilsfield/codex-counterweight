@@ -3,7 +3,7 @@
  * 只抽流程，不抽事件模型：各宿主自己解析输入、翻译输出。
  */
 import path from "node:path";
-import { changedFiles, chronicleReport, workingDiff } from "./auto.js";
+import { changedFiles, chronicleReport, renderActions, workingDiff, type ActionRecord } from "./auto.js";
 import { checkPassed, renderCheckReport, runEndCheck } from "./check.js";
 import type { ProjectConfig } from "./config.js";
 import { recordEvent } from "./meter.js";
@@ -93,6 +93,8 @@ export async function endCheck(params: {
   signal: AbortSignal;
   claim: (name: Claim) => Promise<boolean>;
   prompt: () => Promise<string>;
+  /** 本回合的非只读动作，只交给 over_review。 */
+  actions: () => Promise<ActionRecord[]>;
 }): Promise<EndCheckResult> {
   const { root, project, session, signal } = params;
   const texts: string[] = [];
@@ -157,26 +159,42 @@ async function runAuto(
   try {
     if (!project.auto.review && !project.auto.chronicle) return none;
     const diff = await workingDiff(root);
-    if (diff === null || diff.trim() === "") return none;
+    const changed = diff !== null && diff.trim() !== "";
+    // 跑了命令但没改文件时 diff 是空的。命令只交给 over_review，review 仍按 diff 判断对错。
+    const actions = renderActions(await params.actions());
+    const plan = {
+      review: project.auto.review && changed,
+      overReview: project.auto.review && (changed || actions !== ""),
+      chronicle: project.auto.chronicle && changed,
+    };
+    if (!plan.review && !plan.overReview && !plan.chronicle) return none;
     const ctx: RoleContext = { repo: root, session, project, runner: params.runner };
-    if (project.auto.review) {
-      const body = reviewMessage({ request: await params.prompt(), diff });
+    const request = await params.prompt();
+    if (plan.review || plan.overReview) {
+      const empty = Promise.resolve({ answer: null });
       const [correct, over] = await Promise.all([
-        runAndMeter(ctx, "review", "cw_review", project.models.review!, body, signal),
-        runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review!, body, signal),
+        plan.review
+          ? runAndMeter(ctx, "review", "cw_review", project.models.review!, reviewMessage({ request, diff: diff ?? "" }), signal)
+          : empty,
+        plan.overReview
+          ? runAndMeter(ctx, "over_review", "cw_over_review", project.models.over_review!, reviewMessage({ request, diff: diff ?? "", actions }), signal)
+          : empty,
       ]);
       const findings = [correct, over]
         .map((run) => run.answer?.trim() ?? "")
         .filter((answer) => answer !== "" && answer !== "none" && !answer.startsWith("ASK:"));
       if (findings.length > 0) {
-        if (await params.claim("findings")) {
+        // 没有 diff 时发现只针对已经跑完的命令，再续跑一轮无文件可改，只会把同一批调用重审一遍。
+        // 额度照样用掉：发现在本回合只提示一次。
+        const first = await params.claim("findings");
+        if (changed && first) {
           return { text: null, findings: `[counterweight] 自动审查有发现，处理或说明为什么不处理：\n\n${findings.join("\n\n")}` };
         }
-        return { text: `[counterweight] 自动审查（续跑之后）仍有发现，不再续跑：\n\n${findings.join("\n\n")}`, findings: null };
+        return { text: `[counterweight] 自动审查有发现，不再续跑：\n\n${findings.join("\n\n")}`, findings: null };
       }
     }
-    if (project.auto.chronicle) {
-      const report = chronicleReport(await params.prompt(), changedFiles(diff), checkLine);
+    if (plan.chronicle) {
+      const report = chronicleReport(request, changedFiles(diff!), checkLine);
       await chronicle(ctx, project.models.historian!, report, signal);
     }
     return none;

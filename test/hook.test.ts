@@ -193,6 +193,74 @@ describe("auto review", () => {
   }, 30_000);
 });
 
+describe("commands for over_review", () => {
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+  const shell = (command: string, extra: Record<string, unknown> = {}) => runHook({
+    hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, ...extra,
+  });
+  const stop = () => runHook({ hook_event_name: "Stop" });
+
+  beforeEach(async () => {
+    await writeConfig('version = 1\n[protect]\npaths = ["tests"]\n[auto]\nreview = true\n');
+    await writeConfigFile(repo, "codex.toml", '[models]\nreview = "rv"\nover_review = "ov"\n');
+    await writeFile(path.join(repo, "a.txt"), "1\n");
+    git("add", "a.txt");
+    git("commit", "-qm", "init");
+  });
+
+  it("gives over_review the root thread's commands and skips review on an empty diff", async () => {
+    await installFakeCodex(sandbox, { default: { answer: "none" } });
+    expect((await shell("python sweep.py --all")).stdout).toBe("");
+    await shell("rm -rf sub", { agent_id: "sub1" });
+    expect((await stop()).stdout).toBe("");
+    const calls = await fakeCalls(sandbox);
+    expect(calls.map((call) => call.model)).toEqual(["ov"]);
+    expect(calls[0]!.stdin).toContain("bash python sweep.py --all");
+    expect(calls[0]!.stdin).toContain("共 1 条");
+    expect(calls[0]!.stdin).not.toContain("rm -rf sub");
+  });
+
+  it("sends review the diff only when the diff changed", async () => {
+    await installFakeCodex(sandbox, { default: { answer: "none" } });
+    await writeFile(path.join(repo, "a.txt"), "2\n");
+    await shell("python sweep.py");
+    await stop();
+    const calls = await fakeCalls(sandbox);
+    expect(calls.map((call) => call.model).sort()).toEqual(["ov", "rv"]);
+    expect(calls.find((call) => call.model === "rv")!.stdin).not.toContain("python sweep.py");
+    expect(calls.find((call) => call.model === "ov")!.stdin).toContain("python sweep.py");
+  });
+
+  it("shows findings without a diff and does not continue, even the first time", async () => {
+    await installFakeCodex(sandbox, { byModel: { ov: { answer: "CUT `sweep`\n删：重跑\n留：无\n因为：请求没要求" } } });
+    await shell("python sweep.py");
+    const { out } = await stop();
+    expect(out.decision).toBeUndefined();
+    expect(out.systemMessage).toContain("自动审查有发现，不再续跑");
+    expect(out.systemMessage).toContain("CUT `sweep`");
+    // 额度已用掉：之后有 diff 的发现也只显示。
+    await writeFile(path.join(repo, "a.txt"), "2\n");
+    const later = await stop();
+    expect(later.out.decision).toBeUndefined();
+  });
+
+  it("does not record a call that protection blocked", async () => {
+    await installFakeCodex(sandbox, { default: { answer: "none" } });
+    const blocked = await runHook({
+      hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: { command: patch("*** Add File: tests/a.ts", "+x") },
+    });
+    expect(denied(blocked.out)).toBe(true);
+    await stop();
+    expect(await fakeCalls(sandbox)).toHaveLength(0);
+    await runHook({
+      hook_event_name: "PreToolUse", tool_name: "apply_patch", tool_input: { command: patch("*** Add File: src/a.ts", "+x") },
+    });
+    await stop();
+    expect((await fakeCalls(sandbox))[0]!.stdin).toContain("apply_patch src/a.ts");
+  });
+});
+
 describe("PAUSE", () => {
   let transcript: string;
   const line = (payload: Record<string, unknown>) => JSON.stringify({ type: "response_item", payload });

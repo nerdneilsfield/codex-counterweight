@@ -144,6 +144,7 @@ grep '"event":"check"' .cw/meter.jsonl
 | 注入工作约束 | 会话开始、`/clear`、压缩 | 会话开始、`/clear`、压缩 | 顶层会话的每次模型调用 |
 | 保存请求原文，供自动审查使用 | 用户提交请求 | 用户提交请求 | prompt |
 | 拒绝写入受保护路径；可选地在第一次改源码前暂停 | `apply_patch` | `Edit`、`Write`、`NotebookEdit` | `write`、`edit`、`patch` |
+| 记录本轮的 shell 命令和文件写入，供 `auto.review` 使用 | `Bash`、`exec_command`、`shell_command`、`apply_patch` | `Bash`、`Edit`、`Write`、`NotebookEdit` | `shell`、`write`、`edit`、`patch` |
 | 把 token 用量追加到 `.cw/meter.jsonl` | 模型响应 | 回合结束和会话结束时扫描 transcript | 完成的步骤 |
 | 运行检查，然后运行已开启的自动任务 | 回合结束 | 回合结束 | 会话空闲 |
 
@@ -286,9 +287,13 @@ OpenCode 按第一个斜杠切分模型名称，所以斜杠之后的模型 id �
 
 | 字段 | 需要的模型 | 行为 |
 | --- | --- | --- |
-| `auto.review` | `review`、`over_review` | 回合结束且有改动时，用相对 `HEAD` 的 diff 并行运行两个审查者。发现的问题每轮交回模型一次，之后的发现只显示。超过 80,000 字符的 diff 会被截断。 |
+| `auto.review` | `review`、`over_review` | 回合结束且有改动时，用相对 `HEAD` 的 diff 并行运行两个审查者。`over_review` 还会收到本轮的命令（见下）。发现的问题每轮交回模型一次，之后的发现只显示。超过 80,000 字符的 diff 会被截断。 |
 | `auto.chronicle` | `historian` | 回合结束、有改动且没有审查发现时，把本轮摘要交给史官。 |
 | `auto.pause` | `planner` | 拒绝每轮第一次改源码的操作，只拒绝一次，并返回 `planner` 角色写的计划。`.cw/` 和 `tmp/` 下的编辑不算在内。 |
+
+`over_review` 会收到本轮顶层代理执行的 shell 命令和文件写入，列在 diff 后面。列出的是调用，不是执行结果。diff 看不到没有改动文件的命令，例如重跑一次或扩大扫描范围。清单最多 40 条，超出时先舍弃文件写入，超过 2000 字符的命令不列出。被路径保护或 `auto.pause` 拒绝的调用不在清单里，子代理执行的命令也不在。`review` 仍然只按 diff 判断。
+
+只跑了命令、没有改文件的回合仍会运行 `over_review`，但不运行 `review` 和 `auto.chronicle`。它的发现会显示，却不会让这一轮继续，因为命令已经执行完，没有文件可改。这些发现仍然用掉本轮交回模型的额度。
 
 审查和检查互相独立：自动运行失败或超时只是不产生文字，不会改变检查结果。`auto.pause` 的计划只是建议，模型可以不同意并重新发起编辑。planner 失败、超时或读不到会话记录时，编辑照常执行。
 
@@ -310,12 +315,13 @@ OpenCode 按第一个斜杠切分模型名称，所以斜杠之后的模型 id �
 - 检查结果只取决于退出码。插件不检测被跳过或被削弱的测试。
 - `[router]` 只作用于直接调用的 `cw_review` 和 `cw_over_review`。`auto.review` 总是运行审查者。
 - 各宿主的角色运行器依赖该宿主的输出或接口格式，宿主更新可能改变它。
+- 插件不记录子代理的命令和文件写入，所以 `over_review` 看不到它们。
 
 Codex CLI：
 
 - 如果 hook 进程在返回决定前崩溃，Codex 会放行工具调用。
 - `codex exec` 会直接跳过未信任的 hook，不给提示。TUI 在启动时会要求你查看。
-- 更新改变了 hook 时，需要重新信任该 hook。
+- 更新改变了 hook 时，需要重新信任该 hook。本插件的 0.3.0 版把 `PreToolUse` 的匹配范围扩大到 shell 工具，所以更新到这个版本后，Codex 会再次要求你查看 hook。
 - `planner` 角色运行时关闭了 shell 和联网搜索。`apply_patch` 对该角色是否也不可用尚未验证，所以这项限制还依赖角色提示。
 - `sandbox = "none"` 时，角色只受提示约束。
 - MCP server 只能收到 `HOME`、`LANG`、`LC_ALL`、`LOGNAME`、`PATH`、`SHELL`、`TERM`、`USER`、`CODEX_HOME` 和 `OPENAI_API_KEY`。如果 `router.api_key_env` 指向其他变量，key 传不到 server，闸门按失败处理，审查照常运行。
@@ -352,7 +358,7 @@ OpenCode：
 | Codex 上角色读不了文件 | 这台机器上 Codex 沙箱无法启动 | 检查 `kernel.apparmor_restrict_unprivileged_userns`，或设置 `roles.sandbox = "none"`。 |
 | 角色报告 `未正常结束` | 角色的回合没有完成 | 查看消息里的原因，然后重新调用工具。 |
 | 角色报告超时 | 输入处理时间超过了 `timeout_s` | 用消息里给出的值重试。已到 1800 秒时，拆小输入。 |
-| `[auto]` 没有动作 | 该字段没有模型，或工作树没有改动 | 查看会话开始时的提示，并确认这一轮改了文件。 |
+| `[auto]` 没有动作 | 该字段没有模型，或工作树没有改动 | 查看会话开始时的提示，并确认这一轮改了文件。没有改动的回合只要跑过命令，仍会运行 `over_review`。 |
 
 ## 开发
 

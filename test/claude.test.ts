@@ -122,6 +122,26 @@ describe("auto review", () => {
   });
 });
 
+describe("commands for over_review", () => {
+  it("records Bash for over_review but not a blocked edit", async () => {
+    await project('version = 1\n[protect]\npaths = ["tests"]\n[auto]\nreview = true\n');
+    await writeConfig(repo, "claude.toml", '[models]\nreview = "rv"\nover_review = "ov"\n');
+    await installFakeClaude(sandbox, { default: { answer: "none" } });
+    await writeFile(path.join(repo, "a.txt"), "1\n");
+    const git = (...args: string[]) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: repo });
+    git("add", "a.txt");
+    git("commit", "-qm", "init");
+    expect(denied((await edit("tests/a.ts")).out)).toBe(true);
+    await hook({ hook_event_name: "Stop" });
+    expect(await fakeCalls(sandbox)).toHaveLength(0);
+    expect((await hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "make all" } })).stdout).toBe("");
+    await hook({ hook_event_name: "Stop" });
+    const calls = await fakeCalls(sandbox);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.stdin).toContain("bash make all");
+  });
+});
+
 describe("PAUSE", () => {
   let transcript: string;
   const line = (entry: Record<string, unknown>) => JSON.stringify(entry);

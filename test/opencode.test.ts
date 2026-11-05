@@ -222,6 +222,47 @@ describe("end of turn", () => {
   });
 });
 
+describe("commands for over_review", () => {
+  const before = (fake: Awaited<ReturnType<typeof start>>, tool: string, input: Record<string, unknown>, sessionID = "root") =>
+    fake.fire("execute.before", { tool, sessionID, input });
+  const idle = (fake: Awaited<ReturnType<typeof start>>) => fake.fire("experimental.idle", { sessionID: "root", background: [] });
+  const sessionsOf = (fake: Awaited<ReturnType<typeof start>>, id: string) =>
+    [...fake.sessions.values()].filter((session) => session.model?.id === id);
+
+  it("gives over_review the root session's commands, skips review on an empty diff, and does not record a blocked call", async () => {
+    await project('version = 1\n[protect]\npaths = ["tests"]\n[auto]\nreview = true\n');
+    await host('[models]\nreview = "p/rv"\nover_review = "p/ov"\n');
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-aqm", "two"], { cwd: repo });
+    const fake = await start();
+    fake.sessions.set("sub", { parentID: "root", prompts: [], interrupted: false });
+    await fake.fire("prompt", { sessionID: "root", prompt: { text: "p" } });
+    await expect(before(fake, "write", { path: "tests/a.ts", content: "" })).rejects.toThrow("受保护路径");
+    await before(fake, "shell", { command: "python sweep.py" });
+    await before(fake, "shell", { command: "rm -rf sub" }, "sub");
+    await idle(fake);
+    expect(sessionsOf(fake, "rv")).toHaveLength(0);
+    const over = sessionsOf(fake, "ov");
+    expect(over).toHaveLength(1);
+    expect(over[0]!.prompts[0]).toContain("bash python sweep.py");
+    expect(over[0]!.prompts[0]).toContain("共 1 条");
+    expect(over[0]!.prompts[0]).not.toContain("rm -rf sub");
+    expect(over[0]!.prompts[0]).not.toContain("tests/a.ts");
+  });
+
+  it("does not continue on findings without a diff", async () => {
+    await project('version = 1\n[auto]\nreview = true\n');
+    await host('[models]\nreview = "p/rv"\nover_review = "p/ov"\n');
+    execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-aqm", "two"], { cwd: repo });
+    const fake = await start({ answers: { "p/ov": "CUT `sweep`\n删：重跑\n留：无\n因为：请求没要求" } });
+    await fake.fire("prompt", { sessionID: "root", prompt: { text: "p" } });
+    await before(fake, "shell", { command: "python sweep.py" });
+    await idle(fake);
+    expect(fake.synthetic).toHaveLength(1);
+    expect(fake.synthetic[0]!.text).toContain("原样转告");
+    expect(fake.synthetic[0]!.text).toContain("自动审查有发现，不再续跑");
+  });
+});
+
 describe("PAUSE", () => {
   beforeEach(async () => {
     await project('version = 1\n[protect]\npaths = ["tests"]\n[auto]\npause = true\n');

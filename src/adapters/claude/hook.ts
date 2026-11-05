@@ -10,7 +10,7 @@ import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
 import { renderTranscript } from "../../core/pause.js";
-import { claim, endSession, loadPrompt, loadSeen, markSeen, savePrompt } from "../../core/turnstate.js";
+import { claim, endSession, loadActions, loadPrompt, loadSeen, markSeen, recordAction, savePrompt } from "../../core/turnstate.js";
 import { sessionSection } from "../../roles/prompts.js";
 import { runRole } from "./runner.js";
 import { assistantUsage, parseTranscript } from "./transcript.js";
@@ -103,21 +103,32 @@ async function preToolUse(root: string, cwd: string, input: HookInput): Promise<
     return null;
   }
   if (project === null) return null;
+  const session = input.session_id ?? "";
+  const turn = input.prompt_id ?? "";
+  // 主代理的 Bash 命令只记录，不过保护和 PAUSE。
+  if (input.tool_name === "Bash") {
+    const command = input.tool_input?.command;
+    if (input.agent_id === undefined && typeof command === "string" && command !== "") {
+      await recordAction(session, turn, { tool: "bash", detail: command });
+    }
+    return null;
+  }
   const target = input.tool_input?.[input.tool_name === "NotebookEdit" ? "notebook_path" : "file_path"];
   const paths = typeof target === "string" && target !== "" ? [target] : [];
   const refusal = await checkPaths(root, cwd, project, paths);
   if (refusal !== null) return deny(refusal);
-  // PAUSE 只在主代理拦。
+  // PAUSE 只在主代理拦；子代理的调用也不记。
   if (input.agent_id !== undefined) return null;
-  const session = input.session_id ?? "";
   const plan = await pausePlan({
     root, cwd: await realpathOr(cwd), project, session, paths,
     tool: input.tool_name ?? "", input: input.tool_input ?? {},
     runner: runRole, signal: new AbortController().signal,
-    claim: () => claim(session, input.prompt_id ?? "", "pause"),
+    claim: () => claim(session, turn, "pause"),
     transcript: async () => renderTranscript(parseTranscript(await readFile(input.transcript_path ?? "", "utf8"))),
   });
-  return plan === null ? null : deny(plan);
+  if (plan !== null) return deny(plan);
+  for (const file of paths) await recordAction(session, turn, { tool: input.tool_name ?? "", detail: file });
+  return null;
 }
 
 async function stop(root: string, input: HookInput): Promise<Output> {
@@ -134,6 +145,7 @@ async function stop(root: string, input: HookInput): Promise<Output> {
     root, project, session, runner: runRole, signal: new AbortController().signal,
     claim: (name) => claim(session, turn, name),
     prompt: () => loadPrompt(session, turn),
+    actions: () => loadActions(session, turn),
   });
   if (result.continueWith !== null) {
     return { decision: "block", reason: result.continueWith, systemMessage: result.report ?? undefined };

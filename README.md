@@ -144,6 +144,7 @@ The plugin acts on the following events of each host.
 | Injects the working instructions | Session start, `/clear`, compaction | Session start, `/clear`, compaction | Every model call of a top-level session |
 | Stores the prompt for automatic reviews | User prompt | User prompt | Prompt |
 | Rejects writes to protected paths, and optionally pauses the first source edit | `apply_patch` | `Edit`, `Write`, `NotebookEdit` | `write`, `edit`, `patch` |
+| Records the turn's shell commands and file writes for `auto.review` | `Bash`, `exec_command`, `shell_command`, `apply_patch` | `Bash`, `Edit`, `Write`, `NotebookEdit` | `shell`, `write`, `edit`, `patch` |
 | Appends token usage to `.cw/meter.jsonl` | Model response | Transcript scan at turn end and session end | Finished step |
 | Runs the check, then any automatic runs | Turn end | Turn end | Session idle |
 
@@ -286,9 +287,13 @@ By default, the model decides whether to call the role tools. The `[auto]` keys 
 
 | Key | Needs | Behavior |
 | --- | --- | --- |
-| `auto.review` | `review`, `over_review` | At the end of a turn with changes, runs both reviewers in parallel on the diff against `HEAD`. Findings go back to the model once per turn. Later findings are only shown. Diffs longer than 80,000 characters are truncated. |
+| `auto.review` | `review`, `over_review` | At the end of a turn with changes, runs both reviewers in parallel on the diff against `HEAD`. `over_review` also receives the turn's commands (see below). Findings go back to the model once per turn. Later findings are only shown. Diffs longer than 80,000 characters are truncated. |
 | `auto.chronicle` | `historian` | At the end of a turn with changes and no findings, sends a summary of the turn to the historian. |
 | `auto.pause` | `planner` | Rejects the first source edit of each turn, once, and returns a plan from the `planner` role. Edits under `.cw/` and `tmp/` do not count. |
+
+`over_review` receives the shell commands and file writes of the top-level agent in the current turn, listed after the diff. They are the calls, not their results. A diff does not show a command that changed no file, such as a rerun or a wider sweep. The list holds at most 40 entries. When it is longer, file writes are dropped first, and a command longer than 2,000 characters is left out. A call that path protection or `auto.pause` rejected is not listed. Commands run by sub-agents are not listed. `review` still judges the diff only.
+
+A turn that ran commands but changed no file still runs `over_review`, without `review` or `auto.chronicle`. Its findings are shown but do not continue the turn, because the commands have already run and no file is left to change. They use up the turn's allowance for findings.
 
 The review and the check are independent: a failed or timed-out automatic run produces no text and never changes the check result. The plan from `auto.pause` is advice. The model can disagree and resend the edit. If the planner fails, times out, or cannot read the session record, the edit goes through.
 
@@ -310,12 +315,13 @@ Limits on every host:
 - The check result depends on the exit code alone. The plugin does not detect skipped or weakened tests.
 - `[router]` applies to direct `cw_review` and `cw_over_review` calls. `auto.review` always runs the reviewers.
 - The role runner of each host depends on that host's output or API format. An update of the host can change it.
+- The plugin does not record the commands and file writes of sub-agents, so `over_review` does not see them.
 
 Codex CLI:
 
 - If the hook process crashes before it returns a decision, Codex allows the tool call.
 - `codex exec` skips untrusted hooks without a notice. The TUI asks you to review them at startup.
-- After an update changes a hook, you need to trust that hook again.
+- After an update changes a hook, you need to trust that hook again. Version 0.3.0 of the Codex plugin widens the `PreToolUse` matcher to shell tools, so Codex asks you to review the hooks again after you update to it.
 - The `planner` role runs without the shell and web search. It was not verified that `apply_patch` is also unavailable to this role, so its restriction also relies on its instructions.
 - `sandbox = "none"` limits a role through its instructions only.
 - The MCP server receives only `HOME`, `LANG`, `LC_ALL`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`, `CODEX_HOME`, and `OPENAI_API_KEY`. A key that `router.api_key_env` names under any other variable never reaches the server. The router then counts as failed, and the review runs as usual.
@@ -352,7 +358,7 @@ OpenCode:
 | A role cannot read files on Codex | The Codex sandbox cannot start on this machine | Check `kernel.apparmor_restrict_unprivileged_userns`, or set `roles.sandbox = "none"`. |
 | A role reports `未正常结束` | The role's turn did not complete | Read the reason in the message and call the tool again. |
 | A role reports a timeout | The input took longer than `timeout_s` | Retry with the value in the message. At 1800 seconds, split the input. |
-| `[auto]` does nothing | The key has no model, or the work tree has no changes | Check the notice at session start, and confirm that the turn changed files. |
+| `[auto]` does nothing | The key has no model, or the work tree has no changes | Check the notice at session start, and confirm that the turn changed files. A turn without changes still runs `over_review` if it ran commands. |
 
 ## Development
 
