@@ -305,3 +305,32 @@ describe("missing [check] notice", () => {
     expect((await start("startup")).out.systemMessage).toBeUndefined();
   });
 });
+
+describe("dangerous commands and scope", () => {
+  const bash = (command: string) => hook({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } });
+  const scope = (text: string) => mkdir(path.join(repo, ".cw"), { recursive: true })
+    .then(() => writeFile(path.join(repo, ".cw/scope.txt"), text));
+
+  it("denies the worst commands with no config, and lets ordinary and quoted ones through", async () => {
+    const { out } = await bash("git push -f origin master");
+    expect(denied(out)).toBe(true);
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("强制推送 master");
+    expect(denied((await bash("echo ok; mkfs /dev/null-cw-probe")).out)).toBe(true);
+    for (const command of ["git push origin master", 'git commit -m "git push --force origin main"', "rm -rf dist"]) {
+      expect((await bash(command)).stdout).toBe("");
+    }
+  });
+
+  it("limits Edit and Write to the prefixes in scope.txt and protects scope.txt, with no config", async () => {
+    await scope("src\n");
+    expect((await edit("src/a.ts")).stdout).toBe("");
+    expect((await edit(".cw/notes.md")).stdout).toBe("");
+    expect(denied((await edit("lib/a.ts")).out)).toBe(true);
+    const own = await hook({
+      hook_event_name: "PreToolUse", tool_name: "Write", tool_input: { file_path: path.join(repo, ".cw/scope.txt"), content: "" },
+    });
+    expect(denied(own.out)).toBe(true);
+    await scope("# empty\n");
+    expect((await edit("lib/a.ts")).stdout).toBe("");
+  });
+});

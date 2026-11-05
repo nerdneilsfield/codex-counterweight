@@ -10,6 +10,7 @@ import { recordEvent } from "./meter.js";
 import { isNotFound, realpathOr, resolveWriteTarget } from "./paths.js";
 import { isSourceEdit, pauseReason, plannerMessage } from "./pause.js";
 import { GOAL_FILE, isProtected } from "./protect.js";
+import { inScope, readScope, SCOPE_FILE, scopeReason } from "./scope.js";
 import type { Claim } from "./turnstate.js";
 import type { RoleRunner } from "../roles/run.js";
 import { chronicle, reviewMessage, runAndMeter, type RoleContext } from "../roles/tools.js";
@@ -20,7 +21,7 @@ const MAX_CHECK_TIMEOUT_S = 3570;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const PROTECTED_REASON = (relative: string) => `[counterweight] ${relative} 是受保护路径`
-  + "（.cw/project.toml、.cw/goal.md、.cw/ 下的宿主配置文件或项目配置 [protect].paths）；如需修改请由用户手动完成。";
+  + "（.cw/project.toml、.cw/goal.md、.cw/scope.txt、.cw/ 下的宿主配置文件或项目配置 [protect].paths）；如需修改请由用户手动完成。";
 
 const UNVERIFIABLE_REASON = (value: string) =>
   `[counterweight] 路径无法核对受保护集合（符号链接逃逸仓库或不可解析），已拒绝：${value}`;
@@ -72,8 +73,8 @@ function toRepoRelative(repoRoot: string, cwd: string, value: string): string | 
 }
 
 /**
- * 没有可用配置时的最小保护：`.cw/goal.md` 不用配置也会被注入，所以仍然拒绝写它，包括经符号链接指向它的路径。
- * 其他路径一律放行，`.cw/project.toml` 要留给 setup 创建。
+ * 没有可用配置时的最小保护：`.cw/goal.md` 不用配置也会被注入，`.cw/scope.txt` 不用配置也会生效，所以仍然拒绝写它们，
+ * 包括经符号链接指向它们的路径。其他路径一律放行，`.cw/project.toml` 要留给 setup 创建。
  */
 export async function checkGoalPaths(root: string, cwd: string, paths: string[]): Promise<string | null> {
   try {
@@ -81,18 +82,45 @@ export async function checkGoalPaths(root: string, cwd: string, paths: string[])
     for (const raw of paths) {
       const lexical = toRepoRelative(root, realCwd, raw);
       if (lexical === null) continue;
-      if (lexical === GOAL_FILE) return PROTECTED_REASON(GOAL_FILE);
+      if (lexical === GOAL_FILE || lexical === SCOPE_FILE) return PROTECTED_REASON(lexical);
       let resolved: string;
       try {
         resolved = await resolveWriteTarget(root, lexical);
       } catch {
         continue;
       }
-      if (resolved === GOAL_FILE) return `${PROTECTED_REASON(GOAL_FILE)}（路径 ${raw} 指向该受保护文件）`;
+      if (resolved === GOAL_FILE || resolved === SCOPE_FILE) return `${PROTECTED_REASON(resolved)}（路径 ${raw} 指向该受保护文件）`;
     }
     return null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * `.cw/scope.txt` 有内容时，写入范围外的路径被拒绝；不用配置也生效。没有文件、没有有效行时放行。
+ * 范围生效时解析不出路径、路径在仓库外或无法核对都拒绝。
+ */
+export async function checkScopePaths(root: string, cwd: string, paths: string[]): Promise<string | null> {
+  try {
+    const prefixes = await readScope(root);
+    if (prefixes === null) return null;
+    if (paths.length === 0) return `[counterweight] 无法解析出写入路径，无法核对 ${SCOPE_FILE} 的范围，已拒绝。`;
+    const realCwd = await realpathOr(cwd);
+    for (const raw of paths) {
+      const lexical = toRepoRelative(root, realCwd, raw);
+      if (lexical === null) return scopeReason(raw);
+      if (!inScope(lexical, prefixes)) return scopeReason(lexical);
+      try {
+        const resolved = await resolveWriteTarget(root, lexical);
+        if (!inScope(resolved, prefixes)) return `${scopeReason(resolved)}（路径 ${raw} 指向它）`;
+      } catch (error) {
+        if (!isNotFound(error)) return UNVERIFIABLE_REASON(raw);
+      }
+    }
+    return null;
+  } catch (error) {
+    return `[counterweight] 范围检查出错，已拒绝：${message(error)}`;
   }
 }
 

@@ -5,8 +5,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { snapshotTree } from "../../core/auto.js";
+import { dangerousCommand } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
-import { checkGoalPaths, checkPaths, endCheck, missingCheckNotice, pausePlan } from "../../core/flow.js";
+import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, missingCheckNotice, pausePlan } from "../../core/flow.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
 import { realpathOr } from "../../core/paths.js";
@@ -128,9 +129,13 @@ const deny = (reason: string): Output => ({
 
 async function preToolUse(root: string, cwd: string, input: HookInput): Promise<Output> {
   const command = input.tool_input?.command;
-  // goal.md 不用配置也会被注入，所以配置缺失或非法时也不许改它。
-  if (input.tool_name === undefined || !SHELL_TOOLS.has(input.tool_name)) {
-    const goal = await checkGoalPaths(root, cwd, typeof command === "string" ? patchPaths(command) : []);
+  // 高危命令、goal.md 和 scope.txt 不用配置也生效：goal.md 不用配置也会被注入，所以配置缺失或非法时也不许改它。
+  if (input.tool_name !== undefined && SHELL_TOOLS.has(input.tool_name)) {
+    const danger = typeof command === "string" ? dangerousCommand(command) : null;
+    if (danger !== null) return deny(danger);
+  } else {
+    const patched = typeof command === "string" ? patchPaths(command) : [];
+    const goal = await checkGoalPaths(root, cwd, patched) ?? await checkScopePaths(root, cwd, patched);
     if (goal !== null) return deny(goal);
   }
   let project: ProjectConfig | null;

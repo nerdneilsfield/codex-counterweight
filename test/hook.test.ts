@@ -500,3 +500,53 @@ describe("missing [check] notice", () => {
     expect(invalid).not.toContain("结束检查没有配置");
   });
 });
+
+describe("dangerous commands and scope", () => {
+  const shell = (command: string, tool = "Bash") => runHook({
+    hook_event_name: "PreToolUse", tool_name: tool, tool_input: { command },
+  });
+  const scope = (text: string) => mkdir(path.join(repo, ".cw"), { recursive: true })
+    .then(() => writeFile(path.join(repo, ".cw/scope.txt"), text));
+
+  it("denies the worst commands on every shell tool, with no config at all", async () => {
+    for (const tool of ["Bash", "exec_command", "shell_command"]) {
+      const { out } = await shell("git push --force origin main", tool);
+      expect(denied(out)).toBe(true);
+      expect(out.hookSpecificOutput.permissionDecisionReason).toContain("强制推送 main");
+    }
+    expect(denied((await shell("mkfs /dev/null-cw-probe")).out)).toBe(true);
+    expect(denied((await shell("ls && rm -rf ~")).out)).toBe(true);
+  });
+
+  it("lets ordinary and quoted commands through", async () => {
+    for (const command of ["git push origin main", "git push --force-with-lease origin main", 'git commit -m "rm -rf /"', "rm -rf build"]) {
+      expect((await shell(command)).stdout).toBe("");
+    }
+  });
+
+  it("limits patches to the prefixes in scope.txt, with or without project.toml", async () => {
+    await scope("# only the app\nsrc\n\n");
+    expect((await preTool(patch("*** Add File: src/a.ts", "+x"))).stdout).toBe("");
+    expect((await preTool(patch("*** Add File: .cw/notes.md", "+x"))).stdout).toBe("");
+    const out = (await preTool(patch("*** Add File: srcx/a.ts", "+x"))).out;
+    expect(denied(out)).toBe(true);
+    expect(out.hookSpecificOutput.permissionDecisionReason).toContain("srcx/a.ts");
+    expect(denied((await preTool(patch("*** Update File: lib/a.ts", "@@"))).out)).toBe(true);
+    await writeConfig("version = 1\n");
+    expect(denied((await preTool(patch("*** Update File: lib/a.ts", "@@"))).out)).toBe(true);
+    expect((await preTool(patch("*** Add File: src/b.ts", "+x"))).stdout).toBe("");
+  });
+
+  it("follows symlinks out of scope, protects scope.txt itself, and ignores a file with no entries", async () => {
+    await scope("src\n");
+    await mkdir(path.join(repo, "lib"), { recursive: true });
+    await mkdir(path.join(repo, "src"), { recursive: true });
+    await symlink(path.join(repo, "lib"), path.join(repo, "src/out"));
+    expect(denied((await preTool(patch("*** Add File: src/out/x.ts", "+x"))).out)).toBe(true);
+    const own = await preTool(patch("*** Update File: .cw/scope.txt", "@@"));
+    expect(denied(own.out)).toBe(true);
+    expect(own.out.hookSpecificOutput.permissionDecisionReason).toContain("scope.txt");
+    await scope("# nothing here\n\n");
+    expect((await preTool(patch("*** Add File: lib/a.ts", "+x"))).stdout).toBe("");
+  });
+});

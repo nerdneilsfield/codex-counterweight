@@ -3,8 +3,9 @@
  * OpenCode 没有给插件向用户显示文字的通道，所以检查通过时什么也不显示，只写 `.cw/meter.jsonl`。
  */
 import { snapshotTree, type ActionRecord } from "../../core/auto.js";
+import { dangerousCommand } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
-import { checkGoalPaths, checkPaths, endCheck, pausePlan } from "../../core/flow.js";
+import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, pausePlan } from "../../core/flow.js";
 import { readGoal } from "../../core/goal.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { recordUsage } from "../../core/meter.js";
@@ -118,9 +119,11 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
   });
 
   await ctx.tool.hook("execute.before", async (event) => {
-    // 根会话的 shell 命令只记录，不过保护和 PAUSE。
+    // 根会话的 shell 命令只记录，不过保护和 PAUSE；高危命令不用配置也拒绝。
     if (event.tool === "shell") {
       const command = (event.input as Record<string, unknown> | undefined)?.command;
+      const danger = typeof command === "string" ? dangerousCommand(command) : null;
+      if (danger !== null) throw new Error(danger);
       if (typeof command === "string" && command !== "" && !(await isChild(event.sessionID))) {
         turnOf(event.sessionID).actions.push({ tool: "bash", detail: command });
       }
@@ -132,8 +135,8 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
     const paths = event.tool === "patch"
       ? (typeof input.patchText === "string" ? patchPaths(input.patchText) : [])
       : (typeof target === "string" && target !== "" ? [target] : []);
-    // goal.md 不用配置也会被注入，所以配置缺失或非法时也不许改它。
-    const goal = await checkGoalPaths(root, directory, paths);
+    // goal.md 和 scope.txt 不用配置也生效：goal.md 不用配置也会被注入，所以配置缺失或非法时也不许改它。
+    const goal = await checkGoalPaths(root, directory, paths) ?? await checkScopePaths(root, directory, paths);
     if (goal !== null) throw new Error(goal);
     let project: ProjectConfig | null;
     try {

@@ -121,6 +121,138 @@ async function changedFiles(repo, base) {
   return out === null ? [] : out.split("\0").filter((name) => name !== "");
 }
 
+// src/core/danger.ts
+function segments(command) {
+  const result = [];
+  let words = [];
+  let word = "";
+  let started = false;
+  let quote = null;
+  const endWord = () => {
+    if (started) words.push(word);
+    word = "";
+    started = false;
+  };
+  const endSegment = () => {
+    endWord();
+    if (words.length > 0) result.push(words);
+    words = [];
+  };
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i];
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      else word += char;
+    } else if (quote === '"') {
+      if (char === '"') quote = null;
+      else if (char === "\\" && i + 1 < command.length && '"\\$`'.includes(command[i + 1])) word += command[++i];
+      else word += char;
+    } else if (char === "'" || char === '"') {
+      quote = char;
+      started = true;
+    } else if (char === "\\" && i + 1 < command.length) {
+      i += 1;
+      if (command[i] !== "\n") {
+        word += command[i];
+        started = true;
+      }
+    } else if (char === ";" || char === "\n") {
+      endSegment();
+    } else if (char === "|") {
+      if (command[i + 1] === "|") i += 1;
+      endSegment();
+    } else if (char === "&" && command[i + 1] === "&") {
+      i += 1;
+      endSegment();
+    } else if (char === " " || char === "	") {
+      endWord();
+    } else {
+      word += char;
+      started = true;
+    }
+  }
+  endSegment();
+  return result;
+}
+var WRAPPERS = /* @__PURE__ */ new Set(["sudo", "doas", "env", "command", "nohup", "time", "exec", "nice"]);
+var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+function commandOf(words) {
+  let i = 0;
+  for (; ; ) {
+    while (i < words.length && ASSIGNMENT.test(words[i])) i += 1;
+    const name = words[i]?.split("/").pop();
+    if (name === void 0) return null;
+    if (!WRAPPERS.has(name)) return { name, args: words.slice(i + 1) };
+    const wrapper = name;
+    i += 1;
+    while (i < words.length && (words[i].startsWith("-") || ASSIGNMENT.test(words[i]))) {
+      const consumesNext = (wrapper === "sudo" || wrapper === "doas") && (words[i] === "-u" || words[i] === "-g");
+      i += consumesNext ? 2 : 1;
+    }
+  }
+}
+function isRootOrHome(target) {
+  let value = target.replace("${HOME}", "$HOME");
+  if (value.endsWith("/*")) value = value.slice(0, -1);
+  value = value.replace(/\/+$/, "");
+  return value === "" ? target.startsWith("/") : value === "~" || value === "$HOME";
+}
+function dangerousRm(args) {
+  let recursive = false;
+  let force = false;
+  const targets = [];
+  let options = true;
+  for (const arg of args) {
+    if (options && arg === "--") options = false;
+    else if (options && arg.startsWith("--")) {
+      if (arg === "--recursive") recursive = true;
+      if (arg === "--force") force = true;
+    } else if (options && arg.startsWith("-") && arg.length > 1) {
+      if (/[rR]/.test(arg)) recursive = true;
+      if (arg.includes("f")) force = true;
+    } else {
+      targets.push(arg);
+    }
+  }
+  const hit = targets.find(isRootOrHome);
+  return recursive && force && hit !== void 0 ? `\u9012\u5F52\u5F3A\u5236\u5220\u9664 ${hit}` : null;
+}
+function dangerousPush(args) {
+  let i = 0;
+  while (i < args.length && args[i].startsWith("-")) i += args[i] === "-C" || args[i] === "-c" ? 2 : 1;
+  if (args[i] !== "push") return null;
+  let force = false;
+  const refs = [];
+  for (const arg of args.slice(i + 1)) {
+    if (arg === "--force") force = true;
+    else if (arg.startsWith("--")) continue;
+    else if (arg.startsWith("-")) force ||= arg.includes("f");
+    else refs.push(arg);
+  }
+  for (const ref of refs) {
+    if (ref.startsWith("+")) force = true;
+  }
+  const hit = refs.map((ref) => ref.replace(/^\+/, "").split(":").pop().replace(/^refs\/heads\//, "")).find((branch) => branch === "main" || branch === "master");
+  return force && hit !== void 0 ? `\u5F3A\u5236\u63A8\u9001 ${hit}` : null;
+}
+function dangerousCommand(command) {
+  for (const words of segments(command)) {
+    const found = commandOf(words);
+    if (found === null) continue;
+    const { name, args } = found;
+    let reason = null;
+    if (name === "rm") reason = dangerousRm(args);
+    else if (name === "git") reason = dangerousPush(args);
+    else if (name.startsWith("mkfs")) reason = "mkfs \u4F1A\u91CD\u5199\u6574\u4E2A\u8BBE\u5907";
+    else if (name === "dd") {
+      const target = args.find((arg) => arg.startsWith("of=/dev/"));
+      if (target !== void 0 && target !== "of=/dev/null") reason = `dd \u5199\u5165\u8BBE\u5907 ${target.slice(3)}`;
+    }
+    if (reason !== null) return `[counterweight] \u62D2\u7EDD\u9AD8\u5371\u547D\u4EE4\uFF1A${reason}\u3002\u5982\u786E\u9700\u6267\u884C\uFF0C\u8BF7\u7531\u7528\u6237\u624B\u52A8\u8FD0\u884C\u3002`;
+  }
+  return null;
+}
+
 // src/core/config.ts
 import { readFile } from "node:fs/promises";
 import path3 from "node:path";
@@ -8002,23 +8134,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path11, value) {
-  return { type: "update", path: path11, value };
+function CreateUpdate(path12, value) {
+  return { type: "update", path: path12, value };
 }
-function CreateInsert(path11, value) {
-  return { type: "insert", path: path11, value };
+function CreateInsert(path12, value) {
+  return { type: "insert", path: path12, value };
 }
-function CreateDelete(path11) {
-  return { type: "delete", path: path11 };
+function CreateDelete(path12) {
+  return { type: "delete", path: path12 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path11, left, right) {
+function* FromObject17(path12, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path12, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -8028,7 +8160,7 @@ function* FromObject17(path11, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path11}/${key}`, right[key]);
+    yield CreateInsert(`${path12}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -8037,52 +8169,52 @@ function* FromObject17(path11, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path11}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path12}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path11}/${key}`);
+    yield CreateDelete(`${path12}/${key}`);
   }
 }
-function* FromArray13(path11, left, right) {
+function* FromArray13(path12, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path12, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path11}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path12}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path11}/${i}`, right[i]);
+    yield CreateInsert(`${path12}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path11}/${i}`);
+    yield CreateDelete(`${path12}/${i}`);
   }
 }
-function* FromTypedArray2(path11, left, right) {
+function* FromTypedArray2(path12, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path11}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path12}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path11, right);
+    return yield CreateUpdate(path12, right);
   }
 }
-function* FromUnknown(path11, left, right) {
+function* FromUnknown(path12, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path11, right);
+  yield CreateUpdate(path12, right);
 }
-function* FromValue4(path11, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path11, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path11, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path11, left, right) : yield* FromUnknown(path11, left, right);
+function* FromValue4(path12, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path12, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path12, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path12, left, right) : yield* FromUnknown(path12, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8595,7 +8727,7 @@ function normalizeProtectedPath(value) {
 }
 
 // src/core/flow.ts
-import path9 from "node:path";
+import path10 from "node:path";
 
 // src/core/check.ts
 import { mkdtemp as mkdtemp2, open as open2, rm as rm2 } from "node:fs/promises";
@@ -8989,30 +9121,53 @@ ${plan}`;
 }
 
 // src/core/protect.ts
+import path7 from "node:path";
+
+// src/core/scope.ts
+import { readFile as readFile2 } from "node:fs/promises";
 import path6 from "node:path";
+var SCOPE_FILE = ".cw/scope.txt";
+async function readScope(repo) {
+  let text2;
+  try {
+    text2 = await readFile2(path6.join(repo, SCOPE_FILE), "utf8");
+  } catch {
+    return null;
+  }
+  const prefixes = text2.split("\n").map((line) => line.trim()).filter((line) => line !== "" && !line.startsWith("#")).map((line) => line.replace(/^(\.\/)+/, "").replace(/\/+$/, "")).filter((line) => line !== "");
+  return prefixes.length === 0 ? null : prefixes;
+}
+function inScope(relative, prefixes) {
+  const normalized = relative.split(path6.sep).join("/");
+  if (normalized === ".cw" || normalized.startsWith(".cw/")) return true;
+  return prefixes.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
+}
+var scopeReason = (target) => `[counterweight] ${target} \u5728 ${SCOPE_FILE} \u5212\u5B9A\u7684\u8303\u56F4\u4E4B\u5916\uFF0C\u5199\u5165\u88AB\u62D2\u7EDD\uFF1B\u5982\u9700\u4FEE\u6539\u8303\u56F4\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
+
+// src/core/protect.ts
 var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
 var GOAL_FILE = ".cw/goal.md";
 function isProtected(relative, patterns) {
-  const normalized = relative.split(path6.sep).join("/");
-  if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE) return true;
+  const normalized = relative.split(path7.sep).join("/");
+  if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE || normalized === SCOPE_FILE) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
 // src/roles/tools.ts
-import { readFile as readFile2 } from "node:fs/promises";
-import path8 from "node:path";
+import { readFile as readFile3 } from "node:fs/promises";
+import path9 from "node:path";
 
 // src/core/cwfile.ts
 import { lstat as lstat3, mkdir as mkdir2, rename, writeFile } from "node:fs/promises";
-import path7 from "node:path";
+import path8 from "node:path";
 async function writeCwFile(repo, name, content) {
-  const dir = path7.join(repo, ".cw");
+  const dir = path8.join(repo, ".cw");
   await mkdir2(dir, { recursive: true });
   const stat = await lstat3(dir);
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
   }
-  const target = path7.join(dir, name);
+  const target = path8.join(dir, name);
   const temp = `${target}.${process.pid}.tmp`;
   await writeFile(temp, content);
   await rename(temp, target);
@@ -9227,7 +9382,7 @@ ${run.answer}`
 }
 async function readHistory(repo) {
   try {
-    return await readFile2(path8.join(repo, ".cw", HISTORY_FILE), "utf8");
+    return await readFile3(path9.join(repo, ".cw", HISTORY_FILE), "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -9268,7 +9423,7 @@ ${body.slice(0, 200)}`;
 // src/core/flow.ts
 var MAX_CHECK_TIMEOUT_S = 3570;
 var message = (error) => error instanceof Error ? error.message : String(error);
-var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/goal.md\u3001.cw/ \u4E0B\u7684\u5BBF\u4E3B\u914D\u7F6E\u6587\u4EF6\u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
+var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/goal.md\u3001.cw/scope.txt\u3001.cw/ \u4E0B\u7684\u5BBF\u4E3B\u914D\u7F6E\u6587\u4EF6\u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
 var UNVERIFIABLE_REASON = (value) => `[counterweight] \u8DEF\u5F84\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF08\u7B26\u53F7\u94FE\u63A5\u9003\u9038\u4ED3\u5E93\u6216\u4E0D\u53EF\u89E3\u6790\uFF09\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${value}`;
 async function checkPaths(root, cwd, project, paths) {
   try {
@@ -9302,9 +9457,9 @@ async function checkProtectedTarget(root, cwd, patterns, raw) {
   return null;
 }
 function toRepoRelative(repoRoot, cwd, value) {
-  const relative = path9.relative(repoRoot, path9.resolve(cwd, value));
-  if (relative === "" || relative.startsWith("..") || path9.isAbsolute(relative)) return null;
-  return relative.split(path9.sep).join("/");
+  const relative = path10.relative(repoRoot, path10.resolve(cwd, value));
+  if (relative === "" || relative.startsWith("..") || path10.isAbsolute(relative)) return null;
+  return relative.split(path10.sep).join("/");
 }
 async function checkGoalPaths(root, cwd, paths) {
   try {
@@ -9312,18 +9467,40 @@ async function checkGoalPaths(root, cwd, paths) {
     for (const raw of paths) {
       const lexical = toRepoRelative(root, realCwd, raw);
       if (lexical === null) continue;
-      if (lexical === GOAL_FILE) return PROTECTED_REASON(GOAL_FILE);
+      if (lexical === GOAL_FILE || lexical === SCOPE_FILE) return PROTECTED_REASON(lexical);
       let resolved;
       try {
         resolved = await resolveWriteTarget(root, lexical);
       } catch {
         continue;
       }
-      if (resolved === GOAL_FILE) return `${PROTECTED_REASON(GOAL_FILE)}\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u8BE5\u53D7\u4FDD\u62A4\u6587\u4EF6\uFF09`;
+      if (resolved === GOAL_FILE || resolved === SCOPE_FILE) return `${PROTECTED_REASON(resolved)}\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u8BE5\u53D7\u4FDD\u62A4\u6587\u4EF6\uFF09`;
     }
     return null;
   } catch {
     return null;
+  }
+}
+async function checkScopePaths(root, cwd, paths) {
+  try {
+    const prefixes = await readScope(root);
+    if (prefixes === null) return null;
+    if (paths.length === 0) return `[counterweight] \u65E0\u6CD5\u89E3\u6790\u51FA\u5199\u5165\u8DEF\u5F84\uFF0C\u65E0\u6CD5\u6838\u5BF9 ${SCOPE_FILE} \u7684\u8303\u56F4\uFF0C\u5DF2\u62D2\u7EDD\u3002`;
+    const realCwd = await realpathOr(cwd);
+    for (const raw of paths) {
+      const lexical = toRepoRelative(root, realCwd, raw);
+      if (lexical === null) return scopeReason(raw);
+      if (!inScope(lexical, prefixes)) return scopeReason(lexical);
+      try {
+        const resolved = await resolveWriteTarget(root, lexical);
+        if (!inScope(resolved, prefixes)) return `${scopeReason(resolved)}\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u5B83\uFF09`;
+      } catch (error) {
+        if (!isNotFound(error)) return UNVERIFIABLE_REASON(raw);
+      }
+    }
+    return null;
+  } catch (error) {
+    return `[counterweight] \u8303\u56F4\u68C0\u67E5\u51FA\u9519\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${message(error)}`;
   }
 }
 async function endCheck(params) {
@@ -9470,8 +9647,8 @@ async function pausePlan(params) {
 }
 
 // src/core/goal.ts
-import { readFile as readFile3 } from "node:fs/promises";
-import path10 from "node:path";
+import { readFile as readFile4 } from "node:fs/promises";
+import path11 from "node:path";
 
 // src/roles/explorer.md
 var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
@@ -9552,7 +9729,7 @@ Stop when the current question is answered. Do not ask whether to continue.`;
 async function readGoal(repo) {
   if (repo === null) return null;
   try {
-    return await readFile3(path10.join(repo, GOAL_FILE), "utf8");
+    return await readFile4(path11.join(repo, GOAL_FILE), "utf8");
   } catch {
     return null;
   }
@@ -9756,6 +9933,8 @@ async function setupPlugin(ctx) {
   await ctx.tool.hook("execute.before", async (event) => {
     if (event.tool === "shell") {
       const command = event.input?.command;
+      const danger = typeof command === "string" ? dangerousCommand(command) : null;
+      if (danger !== null) throw new Error(danger);
       if (typeof command === "string" && command !== "" && !await isChild(event.sessionID)) {
         turnOf(event.sessionID).actions.push({ tool: "bash", detail: command });
       }
@@ -9765,7 +9944,7 @@ async function setupPlugin(ctx) {
     const input = event.input ?? {};
     const target = input.path;
     const paths = event.tool === "patch" ? typeof input.patchText === "string" ? patchPaths(input.patchText) : [] : typeof target === "string" && target !== "" ? [target] : [];
-    const goal = await checkGoalPaths(root, directory, paths);
+    const goal = await checkGoalPaths(root, directory, paths) ?? await checkScopePaths(root, directory, paths);
     if (goal !== null) throw new Error(goal);
     let project;
     try {

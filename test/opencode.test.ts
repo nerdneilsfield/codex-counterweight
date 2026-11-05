@@ -464,3 +464,28 @@ describe("role step budget", () => {
     await running;
   });
 });
+
+describe("dangerous commands and scope", () => {
+  const before = (fake: Awaited<ReturnType<typeof start>>, tool: string, input: Record<string, unknown>) =>
+    fake.fire("execute.before", { tool, sessionID: "root", input });
+  const scope = (text: string) => mkdir(path.join(repo, ".cw"), { recursive: true })
+    .then(() => writeFile(path.join(repo, ".cw/scope.txt"), text));
+
+  it("throws on the worst shell commands with no config and passes the rest", async () => {
+    const fake = await start();
+    await expect(before(fake, "shell", { command: "git push --force origin main" })).rejects.toThrow("强制推送 main");
+    await expect(before(fake, "shell", { command: "ls; mkfs /dev/null-cw-probe" })).rejects.toThrow("mkfs");
+    await before(fake, "shell", { command: "git push origin main" });
+    await before(fake, "shell", { command: 'git commit -m "rm -rf /"' });
+  });
+
+  it("limits write, edit and patch to scope.txt, and protects scope.txt, with no config", async () => {
+    await scope("src\n");
+    const fake = await start();
+    await before(fake, "write", { path: "src/a.ts", content: "" });
+    await before(fake, "write", { path: ".cw/notes.md", content: "" });
+    await expect(before(fake, "edit", { path: "lib/a.ts" })).rejects.toThrow("scope.txt");
+    await expect(before(fake, "patch", { patchText: "*** Begin Patch\n*** Add File: lib/a.ts\n+x\n*** End Patch" })).rejects.toThrow("lib/a.ts");
+    await expect(before(fake, "write", { path: ".cw/scope.txt", content: "" })).rejects.toThrow("受保护路径");
+  });
+});
