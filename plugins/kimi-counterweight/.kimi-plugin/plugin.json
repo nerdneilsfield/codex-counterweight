@@ -1,0 +1,23 @@
+{
+  "name": "counterweight",
+  "version": "0.1.0",
+  "description": "Run the project's check at the end of each turn, guard protected paths, and record model usage.",
+  "license": "MIT",
+  "homepage": "https://github.com/nerdneilsfield/codex-counterweight",
+  "author": { "name": "nerdneilsfield" },
+  "skills": ["./skills"],
+  "hooks": [
+    { "event": "UserPromptSubmit", "command": "node \"$KIMI_PLUGIN_ROOT/dist/hook.cjs\"", "timeout": 30 },
+    { "event": "TurnStarted", "command": "node \"$KIMI_PLUGIN_ROOT/dist/hook.cjs\"", "timeout": 10 },
+    { "event": "PreToolUse", "matcher": "^(Write|Edit|Bash)$", "command": "node \"$KIMI_PLUGIN_ROOT/dist/hook.cjs\"", "timeout": 600 },
+    { "event": "Stop", "command": "node \"$KIMI_PLUGIN_ROOT/dist/hook.cjs\"", "timeout": 600 },
+    { "event": "SessionEnd", "command": "node \"$KIMI_PLUGIN_ROOT/dist/hook.cjs\"", "timeout": 10 }
+  ],
+  "mcpServers": {
+    "counterweight": {
+      "command": "node",
+      "args": ["./dist/mcp.cjs"],
+      "toolTimeoutMs": 1800000
+    }
+  }
+}

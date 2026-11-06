@@ -145,3 +145,31 @@ export async function saveGoalHash(session: string, hash: string): Promise<void>
     // Without a stored hash the next prompt re-injects the goal, which is harmless.
   }
 }
+
+/** 会话目录下的一个小文本文件，用于没有回合 id 或没有显示渠道的宿主：当前回合、待投递的报告、是否注入过。 */
+const SESSION_FILES = new Set(["turn", "note", "injected"]);
+
+export async function putSessionText(session: string, name: "turn" | "note" | "injected", text: string): Promise<void> {
+  const dir = sessionDir(session);
+  if (dir === null || !SESSION_FILES.has(name)) return;
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, name), text);
+}
+
+/** 读不到时为 null。 */
+export async function getSessionText(session: string, name: "turn" | "note" | "injected"): Promise<string | null> {
+  try {
+    const dir = sessionDir(session);
+    return dir === null ? null : await readFile(path.join(dir, name), "utf8");
+  } catch {
+    return null;
+  }
+}
+
+/** 读出并删除；读不到时为 null。 */
+export async function takeSessionText(session: string, name: "turn" | "note" | "injected"): Promise<string | null> {
+  const text = await getSessionText(session, name);
+  const dir = sessionDir(session);
+  if (text !== null && dir !== null) await rm(path.join(dir, name), { force: true });
+  return text;
+}

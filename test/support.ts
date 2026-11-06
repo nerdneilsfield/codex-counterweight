@@ -47,6 +47,7 @@ export interface Behavior {
   delayMs?: number;
   usage?: Record<string, number>;
   tools?: number;
+  toolsThenHang?: number;
   maxTurns?: boolean;
 }
 
@@ -95,7 +96,7 @@ export async function installFakeClaude(
   await writeFile(path.join(sandbox.bin, "script.json"), JSON.stringify(script));
 }
 
-export interface Call { args: string[]; stdin: string; model: string; pid: number; childPid: number }
+export interface Call { args: string[]; stdin: string; model: string; pid: number; childPid: number; agent?: string; cwRole?: string | null }
 
 export async function fakeCalls(sandbox: Sandbox): Promise<Call[]> {
   try {
@@ -119,4 +120,48 @@ export function alive(pid: number): boolean {
 export async function until(done: () => boolean | Promise<boolean>, ms: number): Promise<void> {
   const end = Date.now() + ms;
   while (!(await done()) && Date.now() < end) await new Promise((r) => setTimeout(r, 50));
+}
+
+export const KIMI_PLUGIN_ROOT = path.resolve("plugins/kimi-counterweight");
+export const KIMI_HOOK = path.join(KIMI_PLUGIN_ROOT, "dist/hook.cjs");
+
+/** 带假 kimi 的环境：Kimi 的主目录在 sandbox.data 下，hook 的回合状态也落在那里。 */
+export function kimiEnv(sandbox: Sandbox, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${sandbox.bin}${path.delimiter}${process.env.PATH ?? ""}`,
+    KIMI_CODE_HOME: path.join(sandbox.data, "kimi-home"),
+    KIMI_PLUGIN_ROOT,
+    HOME: sandbox.data,
+    ...extra,
+  };
+  delete env.PLUGIN_DATA;
+  delete env.CLAUDE_PLUGIN_DATA;
+  delete env.CW_ROLE;
+  return { ...env, ...extra };
+}
+
+export function runKimiHook(
+  sandbox: Sandbox, input: Record<string, unknown>, extra: NodeJS.ProcessEnv = {},
+): Promise<{ stdout: string; stderr: string; code: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", [KIMI_HOOK], { stdio: ["pipe", "pipe", "pipe"], env: kimiEnv(sandbox, extra) });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ stdout, stderr, code }));
+    child.stdin.end(JSON.stringify({ cwd: sandbox.repo, session_id: "k1", ...input }));
+  });
+}
+
+/** 把假 kimi 装到 `bin/kimi`，行为写进 `bin/script.json`。 */
+export async function installFakeKimi(
+  sandbox: Sandbox, script: { default?: Behavior; byModel?: Record<string, Behavior> },
+): Promise<void> {
+  await mkdir(sandbox.bin, { recursive: true });
+  await copyFile(path.resolve("test/fake-kimi.mjs"), path.join(sandbox.bin, "kimi"));
+  await chmod(path.join(sandbox.bin, "kimi"), 0o755);
+  await writeFile(path.join(sandbox.bin, "script.json"), JSON.stringify(script));
 }
