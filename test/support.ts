@@ -24,7 +24,7 @@ export function childEnv(sandbox: Sandbox): NodeJS.ProcessEnv {
   };
 }
 
-export async function writeConfig(repo: string, name: "project.toml" | "codex.toml" | "claude.toml" | "opencode.toml", text: string): Promise<void> {
+export async function writeConfig(repo: string, name: "project.toml" | "codex.toml" | "claude.toml" | "opencode.toml" | "kimi.toml" | "hermes.toml", text: string): Promise<void> {
   await mkdir(path.join(repo, ".cw"), { recursive: true });
   await writeFile(path.join(repo, ".cw", name), text);
 }

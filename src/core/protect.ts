@@ -1,5 +1,5 @@
 /**
- * 受保护路径：项目配置里写死的路径列表，外加 harness 自己的控制面文件 `.cw/project.toml`、`.cw/codex.toml`、`.cw/claude.toml` 和 `.cw/opencode.toml`，以及用户写的 `.cw/goal.md` 和 `.cw/scope.txt`。
+ * 受保护路径：项目配置里写死的路径列表，外加 harness 自己的控制面文件 `.cw/project.toml`、`.cw/codex.toml`、`.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 和 `.cw/hermes.toml`，以及用户写的 `.cw/goal.md` 和 `.cw/scope.txt`。
  * `edit` / `write` 对受保护目标直接拦截。没有内容快照、没有结算时的变化报告。
  *
  * Protected paths: the literal list from the project config plus the harness's
@@ -17,7 +17,7 @@ import { SCOPE_FILE } from "./scope.js";
  * says: the model must not be able to turn the check or the guard off by
  * editing it.
  */
-const CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
+const CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml", ".cw/kimi.toml", ".cw/hermes.toml"];
 
 /** 用户写的目标。模型不能改它：改了之后，注入进提示的约束就由模型自己定义了。 */
 export const GOAL_FILE = ".cw/goal.md";

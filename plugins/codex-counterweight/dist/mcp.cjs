@@ -8368,6 +8368,17 @@ var hostSchemas = {
     type: "object",
     additionalProperties: false,
     properties: { models: roleModels(ModelName) }
+  },
+  // Kimi Code 的模型是 config.toml 里的别名；Hermes 是 `provider/model`，没有斜杠时只传模型名。两者都不含空白。
+  "kimi.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: { models: roleModels(PlainModel) }
+  },
+  "hermes.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: { models: roleModels(PlainModel) }
   }
 };
 async function loadProjectConfig(repo, hostFile) {
@@ -8486,6 +8497,10 @@ function git(repo, args, env = {}) {
     child.once("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
   });
 }
+
+// src/core/role.ts
+var ROLE_ENV = "CW_ROLE";
+var inRole = (env = process.env) => env[ROLE_ENV] === "1";
 
 // src/roles/tools.ts
 var import_promises5 = require("node:fs/promises");
@@ -8606,6 +8621,9 @@ function timeoutAdvice(tool, usedMs) {
   const next = nextTimeoutS(usedMs);
   return next === null ? `\u5DF2\u7ECF\u7528\u6EE1 ${MAX_TIMEOUT_S} \u79D2\u4E0A\u9650\uFF0C\u518D\u52A0\u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\uFF08\u5206\u6587\u4EF6\u3001\u5206\u63D0\u4EA4\uFF09\u540E\u518D\u8C03\u7528 ${tool}\u3002` : `\u4E0B\u4E00\u6863\uFF1A\u7528 timeout_s=${next} \u91CD\u65B0\u8C03\u7528 ${tool}\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF0C\u4E0A\u9650 ${MAX_TIMEOUT_S}\uFF09\u3002`;
 }
+function timedOutAdvice(tool, usedMs, wantedMs) {
+  return usedMs < wantedMs ? `\u672C\u5BBF\u4E3B\u628A\u89D2\u8272\u8D85\u65F6\u538B\u5230 ${Math.round(usedMs / 1e3)} \u79D2\uFF08\u8981\u6C42 ${Math.round(wantedMs / 1e3)} \u79D2\uFF09\uFF0C\u52A0\u5927 timeout_s \u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\u540E\u518D\u8C03\u7528 ${tool}\u3002` : timeoutAdvice(tool, usedMs);
+}
 var ROLES = [
   {
     name: "explorer",
@@ -8692,7 +8710,9 @@ async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
   const { repo, session } = ctx;
   const started = Date.now();
   const configured = ctx.project.timeouts[role];
-  const timeoutMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
+  const wantedMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
+  const capMs = ctx.roleTimeoutCapS === void 0 ? Infinity : ctx.roleTimeoutCapS * 1e3;
+  const timeoutMs = Math.min(wantedMs, capMs);
   const run = await ctx.runner({
     role,
     workRoot: repo,
@@ -8733,7 +8753,7 @@ async function runAndMeter(ctx, role, tool, model, message2, signal, askedS) {
       cancelled: run.cancelled
     }).catch(() => {
     });
-    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timeoutAdvice(tool, timeoutMs) : ""}` };
+    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timedOutAdvice(tool, timeoutMs, wantedMs) : ""}` };
   }
   const head = run.answer.trim();
   const result = head === "none" ? "none" : head.startsWith("ASK:") ? "ask" : "answer";
@@ -8811,6 +8831,7 @@ function serveMcp(host) {
     const params = request.params ?? {};
     const role = ROLES.find((item) => item.tool === params.name);
     if (role === void 0) return textResult(`[counterweight] \u672A\u77E5\u5DE5\u5177 ${params.name}`, true);
+    if (inRole()) return textResult(`[counterweight] \u5F53\u524D\u5728\u89D2\u8272\u4F1A\u8BDD\u91CC\uFF0C${role.tool} \u4E0D\u53EF\u7528\uFF1A\u89D2\u8272\u4E0D\u80FD\u518D\u542F\u52A8\u89D2\u8272\u3002`, true);
     const meta = params._meta ?? {};
     const where = host.locate(meta);
     if (where === null) return textResult("[counterweight] \u8BF7\u6C42\u91CC\u6CA1\u6709\u5DE5\u4F5C\u76EE\u5F55\uFF0C\u65E0\u6CD5\u786E\u5B9A\u4ED3\u5E93\u6839\u3002", true);

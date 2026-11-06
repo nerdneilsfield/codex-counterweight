@@ -144,6 +144,12 @@ export interface EndCheckResult {
   settled: Pick<ChronicleInput, "outcome" | "evidence">;
 }
 
+/** 宿主 hook 的时间预算：检查和自动角色各自的上限，单位秒。 */
+export interface EndCheckLimits {
+  checkTimeoutS: number;
+  roleTimeoutS: number;
+}
+
 export const NO_CHECK: EndCheckResult["settled"] = { outcome: "unknown", evidence: { gap: "没有配置结束检查" } };
 
 /**
@@ -163,6 +169,8 @@ export async function endCheck(params: {
   actions: () => Promise<ActionRecord[]>;
   /** 本回合开始时的工作树快照；没取到为 null。 */
   base: () => Promise<string | null>;
+  /** 宿主的 hook 超时装不下默认预算时，收紧检查和角色的上限（秒）；缺省是现有值。 */
+  limits?: EndCheckLimits;
 }): Promise<EndCheckResult> {
   const { root, project, session, signal } = params;
   const texts: string[] = [];
@@ -172,7 +180,7 @@ export async function endCheck(params: {
   if (project.check !== null) {
     try {
       const check = project.check;
-      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
+      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S, params.limits?.checkTimeoutS ?? MAX_CHECK_TIMEOUT_S);
       const started = Date.now();
       const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout }, signal });
       // 被取消的检查没有结论：不算失败，不用修复额度，也不跑自动任务。
@@ -247,7 +255,9 @@ async function runAuto(
     };
     if (!plan.review && !plan.overReview && !plan.chronicle) return none;
     const failed: NonNullable<RoleContext["failed"]> = [];
-    const ctx: RoleContext = { repo: root, session, project, runner: params.runner, failed };
+    const ctx: RoleContext = {
+      repo: root, session, project, runner: params.runner, failed, roleTimeoutCapS: params.limits?.roleTimeoutS,
+    };
     const failureLine = (): string | null => failed.length === 0 ? null
       : `[counterweight] 自动审查未完成：${failed.map((item) => `${item.role} ${item.reason}`).join("；")}`;
     const request = await params.prompt();

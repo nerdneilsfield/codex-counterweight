@@ -1,7 +1,7 @@
 /**
  * 读取并校验 `.cw/project.toml`（与 pi 版共用，校验规则一致）和可选的宿主文件
- * `.cw/codex.toml`、`.cw/claude.toml` 或 `.cw/opencode.toml`（各自的模型；Codex 另有沙箱）。
- * `project.toml` 的 `[models]` 在三个宿主下都忽略。文件和每个小节都可选。解析或校验失败一律抛错，不返回半套配置。
+ * `.cw/codex.toml`、`.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 或 `.cw/hermes.toml`（各自的模型；Codex 另有沙箱）。
+ * `project.toml` 的 `[models]` 在所有宿主下都忽略。文件和每个小节都可选。解析或校验失败一律抛错，不返回半套配置。
  * 旧的 `[explorer]`、`[observe]` 是未知字段，会让整份配置失败，检查和保护一起停。
  */
 import { readFile } from "node:fs/promises";
@@ -122,7 +122,7 @@ const roleModels = (model: object) => ({
   },
 });
 
-/** 三个宿主文件 schema 相同，`[roles] sandbox` 只有 Codex 接受；OpenCode 的模型是 `provider/model`。 */
+/** 五个宿主文件 schema 相同，`[roles] sandbox` 只有 Codex 接受；OpenCode 的模型是 `provider/model`。 */
 const hostSchemas = {
   "codex.toml": {
     type: "object",
@@ -141,6 +141,13 @@ const hostSchemas = {
   },
   "opencode.toml": {
     type: "object", additionalProperties: false, properties: { models: roleModels(ModelName) },
+  },
+  // Kimi Code 的模型是 config.toml 里的别名；Hermes 是 `provider/model`，没有斜杠时只传模型名。两者都不含空白。
+  "kimi.toml": {
+    type: "object", additionalProperties: false, properties: { models: roleModels(PlainModel) },
+  },
+  "hermes.toml": {
+    type: "object", additionalProperties: false, properties: { models: roleModels(PlainModel) },
   },
 };
 

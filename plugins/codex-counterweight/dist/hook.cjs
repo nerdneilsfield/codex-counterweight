@@ -8767,6 +8767,17 @@ var hostSchemas = {
     type: "object",
     additionalProperties: false,
     properties: { models: roleModels(ModelName) }
+  },
+  // Kimi Code 的模型是 config.toml 里的别名；Hermes 是 `provider/model`，没有斜杠时只传模型名。两者都不含空白。
+  "kimi.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: { models: roleModels(PlainModel) }
+  },
+  "hermes.toml": {
+    type: "object",
+    additionalProperties: false,
+    properties: { models: roleModels(PlainModel) }
   }
 };
 async function loadProjectConfig(repo, hostFile) {
@@ -9274,7 +9285,7 @@ function inScope(relative, prefixes) {
 var scopeReason = (target) => `[counterweight] ${target} \u5728 ${SCOPE_FILE} \u5212\u5B9A\u7684\u8303\u56F4\u4E4B\u5916\uFF0C\u5199\u5165\u88AB\u62D2\u7EDD\uFF1B\u5982\u9700\u4FEE\u6539\u8303\u56F4\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
 
 // src/core/protect.ts
-var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml"];
+var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml", ".cw/kimi.toml", ".cw/hermes.toml"];
 var GOAL_FILE = ".cw/goal.md";
 function isProtected(relative, patterns) {
   const normalized = relative.split(import_node_path8.default.sep).join("/");
@@ -9322,6 +9333,9 @@ function timeoutAdvice(tool, usedMs) {
   const next = nextTimeoutS(usedMs);
   return next === null ? `\u5DF2\u7ECF\u7528\u6EE1 ${MAX_TIMEOUT_S} \u79D2\u4E0A\u9650\uFF0C\u518D\u52A0\u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\uFF08\u5206\u6587\u4EF6\u3001\u5206\u63D0\u4EA4\uFF09\u540E\u518D\u8C03\u7528 ${tool}\u3002` : `\u4E0B\u4E00\u6863\uFF1A\u7528 timeout_s=${next} \u91CD\u65B0\u8C03\u7528 ${tool}\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF0C\u4E0A\u9650 ${MAX_TIMEOUT_S}\uFF09\u3002`;
 }
+function timedOutAdvice(tool, usedMs, wantedMs) {
+  return usedMs < wantedMs ? `\u672C\u5BBF\u4E3B\u628A\u89D2\u8272\u8D85\u65F6\u538B\u5230 ${Math.round(usedMs / 1e3)} \u79D2\uFF08\u8981\u6C42 ${Math.round(wantedMs / 1e3)} \u79D2\uFF09\uFF0C\u52A0\u5927 timeout_s \u6CA1\u6709\u7528\uFF1A\u628A\u8F93\u5165\u62C6\u5C0F\u540E\u518D\u8C03\u7528 ${tool}\u3002` : timeoutAdvice(tool, usedMs);
+}
 var TIMEOUT_DESCRIPTION = `\u672C\u6B21\u8C03\u7528\u7684\u8D85\u65F6\u79D2\u6570\uFF08${MIN_TIMEOUT_S}\u2013${MAX_TIMEOUT_S}\uFF0C\u8D8A\u754C\u4F1A\u88AB\u5939\u4F4F\uFF09\u3002\u6309\u8F93\u5165\u5927\u5C0F\u4F30\uFF1A\u5C0F\u8F93\u5165\u4E0D\u4F20\uFF0C\u7528\u9ED8\u8BA4 ${MIN_TIMEOUT_S}\uFF1B\u660E\u663E\u5F88\u5927\uFF08\u957F diff\u3001\u8DE8\u5F88\u591A\u6587\u4EF6\uFF09\u5C31\u5148\u8BBE\u957F\u4E00\u4E9B\u3002\u8D85\u65F6\u540E\u8FD4\u56DE\u91CC\u4F1A\u7ED9\u4E0B\u4E00\u6863\uFF08\u6BCF\u6B21\u7FFB\u500D\uFF09\uFF0C\u7167\u7740\u91CD\u8BD5\uFF1B\u5DF2\u5230 ${MAX_TIMEOUT_S} \u8FD8\u8D85\u65F6\u5C31\u62C6\u5C0F\u8F93\u5165\uFF0C\u522B\u518D\u52A0\u3002`;
 var HISTORY_FILE = "HISTORY.md";
 function reviewMessage(params) {
@@ -9336,7 +9350,9 @@ async function runAndMeter(ctx, role, tool, model, message3, signal, askedS) {
   const { repo, session } = ctx;
   const started = Date.now();
   const configured = ctx.project.timeouts[role];
-  const timeoutMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
+  const wantedMs = askedS !== void 0 ? askedS * 1e3 : configured !== void 0 ? configured * 1e3 : roleTimeoutMs(role);
+  const capMs = ctx.roleTimeoutCapS === void 0 ? Infinity : ctx.roleTimeoutCapS * 1e3;
+  const timeoutMs = Math.min(wantedMs, capMs);
   const run = await ctx.runner({
     role,
     workRoot: repo,
@@ -9377,7 +9393,7 @@ async function runAndMeter(ctx, role, tool, model, message3, signal, askedS) {
       cancelled: run.cancelled
     }).catch(() => {
     });
-    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timeoutAdvice(tool, timeoutMs) : ""}` };
+    return { answer: null, text: `[counterweight] ${tool} \u672A\u8FD4\u56DE\u7ED3\u679C\uFF08${run.error}\uFF09\uFF1B\u672C\u6B21\u6D88\u8017 ${spent} token${meterNote}\u3002${run.timedOut ? timedOutAdvice(tool, timeoutMs, wantedMs) : ""}` };
   }
   const head = run.answer.trim();
   const result = head === "none" ? "none" : head.startsWith("ASK:") ? "ask" : "answer";
@@ -9529,7 +9545,7 @@ async function endCheck(params) {
   if (project.check !== null) {
     try {
       const check = project.check;
-      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S);
+      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S, params.limits?.checkTimeoutS ?? MAX_CHECK_TIMEOUT_S);
       const started = Date.now();
       const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout }, signal });
       if (outcome.cancelled) {
@@ -9597,7 +9613,14 @@ async function runAuto(params, checkLine) {
     };
     if (!plan.review && !plan.overReview && !plan.chronicle) return none;
     const failed = [];
-    const ctx = { repo: root, session, project, runner: params.runner, failed };
+    const ctx = {
+      repo: root,
+      session,
+      project,
+      runner: params.runner,
+      failed,
+      roleTimeoutCapS: params.limits?.roleTimeoutS
+    };
     const failureLine = () => failed.length === 0 ? null : `[counterweight] \u81EA\u52A8\u5BA1\u67E5\u672A\u5B8C\u6210\uFF1A${failed.map((item) => `${item.role} ${item.reason}`).join("\uFF1B")}`;
     const request = await params.prompt();
     let shown = null;

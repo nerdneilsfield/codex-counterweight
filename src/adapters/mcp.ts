@@ -6,6 +6,7 @@ import { createInterface } from "node:readline";
 import { loadProjectConfig, type HostFile } from "../core/config.js";
 import { repoToplevel } from "../core/gitstate.js";
 import { realpathOr } from "../core/paths.js";
+import { inRole } from "../core/role.js";
 import type { RoleRunner } from "../roles/run.js";
 import { callRole, ROLES, toolInputSchema } from "../roles/tools.js";
 
@@ -51,6 +52,7 @@ export function serveMcp(host: McpHost): void {
     const params = request.params ?? {};
     const role = ROLES.find((item) => item.tool === params.name);
     if (role === undefined) return textResult(`[counterweight] 未知工具 ${params.name}`, true);
+    if (inRole()) return textResult(`[counterweight] 当前在角色会话里，${role.tool} 不可用：角色不能再启动角色。`, true);
     const meta = params._meta ?? {};
     const where = host.locate(meta);
     if (where === null) return textResult("[counterweight] 请求里没有工作目录，无法确定仓库根。", true);

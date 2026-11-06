@@ -18,6 +18,8 @@ describe("host files", () => {
     ["codex.toml", "gpt-5.6-terra"],
     ["claude.toml", "opus"],
     ["opencode.toml", "anthropic/claude-sonnet-4-5"],
+    ["kimi.toml", "cw/terra"],
+    ["hermes.toml", "openrouter/anthropic/claude-sonnet-4.5"],
   ] as const;
 
   it.each(cases)("loads %s and protects it", async (file, model) => {
@@ -38,6 +40,10 @@ describe("host files", () => {
     await expect(loadProjectConfig(repo, "claude.toml")).rejects.toThrow();
     await writeConfig(repo, "opencode.toml", '[roles]\nsandbox = "none"\n');
     await expect(loadProjectConfig(repo, "opencode.toml")).rejects.toThrow();
+    for (const file of ["kimi.toml", "hermes.toml"] as const) {
+      await writeConfig(repo, file, '[roles]\nsandbox = "none"\n');
+      await expect(loadProjectConfig(repo, file)).rejects.toThrow();
+    }
   });
 
   it("requires provider/model in opencode.toml", async () => {

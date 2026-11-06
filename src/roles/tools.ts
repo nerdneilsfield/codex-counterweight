@@ -20,6 +20,8 @@ export interface RoleContext {
   runner: RoleRunner;
   /** 给了就收集本次上下文里失败（非取消）的角色，`[auto]` 靠它在回合结束时说明。 */
   failed?: Array<{ role: RoleName; reason: string }>;
+  /** 宿主的时间预算装不下默认角色超时时的上限（秒）；超出的请求被压到这个值，并在失败信息里写明。 */
+  roleTimeoutCapS?: number;
 }
 
 /**
@@ -31,6 +33,13 @@ function timeoutAdvice(tool: string, usedMs: number): string {
   return next === null
     ? `已经用满 ${MAX_TIMEOUT_S} 秒上限，再加没有用：把输入拆小（分文件、分提交）后再调用 ${tool}。`
     : `下一档：用 timeout_s=${next} 重新调用 ${tool}（每次翻倍，上限 ${MAX_TIMEOUT_S}）。`;
+}
+
+/** 超时被宿主上限压短时，翻倍重试没有用：写明实际值，让调用方拆小输入。 */
+function timedOutAdvice(tool: string, usedMs: number, wantedMs: number): string {
+  return usedMs < wantedMs
+    ? `本宿主把角色超时压到 ${Math.round(usedMs / 1000)} 秒（要求 ${Math.round(wantedMs / 1000)} 秒），加大 timeout_s 没有用：把输入拆小后再调用 ${tool}。`
+    : timeoutAdvice(tool, usedMs);
 }
 
 export const ROLES: Array<{
@@ -130,8 +139,10 @@ export async function runAndMeter(
   const started = Date.now();
   // 调用方这次要求的优先；其次是 [timeouts] 里用户配的，最后是内置默认。
   const configured = ctx.project.timeouts[role];
-  const timeoutMs = askedS !== undefined ? askedS * 1000
+  const wantedMs = askedS !== undefined ? askedS * 1000
     : configured !== undefined ? configured * 1000 : roleTimeoutMs(role);
+  const capMs = ctx.roleTimeoutCapS === undefined ? Infinity : ctx.roleTimeoutCapS * 1000;
+  const timeoutMs = Math.min(wantedMs, capMs);
   const run = await ctx.runner({
     role,
     workRoot: repo,
@@ -167,7 +178,7 @@ export async function runAndMeter(
       outcome: run.budget === true ? "budget" : "failed", error: run.error, tokens: spent, ms: Date.now() - started,
       timed_out: run.timedOut, cancelled: run.cancelled,
     }).catch(() => {});
-    return { answer: null, text: `[counterweight] ${tool} 未返回结果（${run.error}）；本次消耗 ${spent} token${meterNote}。${run.timedOut ? timeoutAdvice(tool, timeoutMs) : ""}` };
+    return { answer: null, text: `[counterweight] ${tool} 未返回结果（${run.error}）；本次消耗 ${spent} token${meterNote}。${run.timedOut ? timedOutAdvice(tool, timeoutMs, wantedMs) : ""}` };
   }
   // result 区分白跑（none）、史官提问（ask）和有内容的回答，供判断这个角色值不值得自动跑。
   const head = run.answer!.trim();
