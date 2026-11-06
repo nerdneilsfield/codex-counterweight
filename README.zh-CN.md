@@ -7,19 +7,21 @@
 [![Tested with Codex CLI 0.166.0](https://img.shields.io/badge/tested%20with-Codex%20CLI%200.166.0-412991)](https://github.com/openai/codex/releases/tag/rust-v0.166.0)
 [![Tested with Claude Code 2.1.318](https://img.shields.io/badge/tested%20with-Claude%20Code%202.1.318-D97757)](https://www.npmjs.com/package/@anthropic-ai/claude-code/v/2.1.318)
 [![Tested with OpenCode 2.2.5](https://img.shields.io/badge/tested%20with-OpenCode%202.2.5-211E1E)](https://github.com/anomalyco/opencode/releases/tag/v2.2.5)
+[![Tested with Kimi Code 2.5.0](https://img.shields.io/badge/tested%20with-Kimi%20Code%202.5.0-1783FF)](https://moonshotai.github.io/kimi-code/)
+[![Tested with Hermes Agent 0.22.7](https://img.shields.io/badge/tested%20with-Hermes%20Agent%200.22.7-7B5CFA)](https://github.com/NousResearch/hermes-agent/tree/v0.22.7)
 [![Node.js >= 22.19](https://img.shields.io/badge/node-%3E%3D22.19-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-7.0-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Tested on Linux](https://img.shields.io/badge/tested%20on-Linux-FCC624?logo=linux&logoColor=black)](#使用限制)
 [![Last commit](https://img.shields.io/github/last-commit/nerdneilsfield/codex-counterweight)](https://github.com/nerdneilsfield/codex-counterweight/commits)
 [![Issues](https://img.shields.io/github/issues/nerdneilsfield/codex-counterweight)](https://github.com/nerdneilsfield/codex-counterweight/issues)
 
-codex-counterweight 是 Codex CLI、Claude Code 和 OpenCode 的插件，用来强制执行项目的结束检查。每轮结束时，插件运行你配置的命令。命令失败时，插件把输出交回模型一次，模型再用一轮修复。第二次失败只报告给你，不再重试。
+codex-counterweight 是 Codex CLI、Claude Code、OpenCode、Kimi Code 和 Hermes Agent 的插件，用来强制执行项目的结束检查。每轮结束时，插件运行你配置的命令。命令失败时，插件把输出交回模型一次，模型再用一轮修复。第二次失败只报告给你，不再重试。
 
-插件还会拒绝对受保护路径的写入，向每个会话注入一段工作约束，并记录模型用量。可选的角色工具用单独的模型做代码探索、审查、研究、规划和项目历史记录。三个宿主共用同一个核心和同一组角色，差别在于结果如何显示、角色如何受限，见[宿主差异](#宿主差异)。
+插件还会拒绝对受保护路径的写入，向每个会话注入一段工作约束，并记录模型用量。可选的角色工具用单独的模型做代码探索、审查、研究、规划和项目历史记录。五个宿主共用同一个核心和同一组角色，差别在于结果如何显示、角色如何受限、检查在什么时候能运行，见[宿主差异](#宿主差异)。
 
 这个插件用来减少模型的无意失误，不是安全边界：shell 命令仍然能写入受保护路径。详见[使用限制](#使用限制)。
 
-它是 [pi-counterweight](https://github.com/nerdneilsfield/pi-counterweight) 的 Codex、Claude Code 和 OpenCode 版本，它们都可以共用一份 `.cw/project.toml`。
+它是 [pi-counterweight](https://github.com/nerdneilsfield/pi-counterweight) 的 Codex、Claude Code、OpenCode、Kimi Code 和 Hermes Agent 版本，它们都可以共用一份 `.cw/project.toml`。
 
 ## 目录
 
@@ -43,7 +45,9 @@ codex-counterweight 是 Codex CLI、Claude Code 和 OpenCode 的插件，用来�
   - Codex CLI 0.166.0。
   - Claude Code 2.1.318。
   - OpenCode 2.2.5。
-- Node.js 22.19 或更新版本，且 `PATH` 上能找到 `node`。Codex 和 Claude Code 用它运行 hook 和 MCP server。
+  - Kimi Code 2.5.0。测试了一次性运行（`kimi -p`）和在终端界面里安装插件，没有测试完整的交互会话。
+  - Hermes Agent 0.22.7。测试了一次性运行（`hermes -z`），没有测试交互式 chat、终端界面和消息平台。
+- Node.js 22.19 或更新版本，且 `PATH` 上能找到 `node`。Codex、Claude Code、Kimi Code 和 Hermes Agent 用它运行 hook 和 MCP server。Hermes Agent 的 hook 运行在 Hermes 按需启动的 gateway 进程里，所以 `node` 必须在该进程的 `PATH` 上。
 - Git。插件用 Git 工作树根目录定位 `.cw/`；不在 Git 仓库里时，使用当前目录。
 
 ## 快速开始
@@ -76,6 +80,24 @@ opencode plugin add github:nerdneilsfield/codex-counterweight
 
 仓库的 `package.json` 把 `exports` 指向 `plugins/opencode-counterweight/index.js`，那是插件入口。
 
+**Kimi Code**
+
+从本地克隆安装。启动 `kimi`，输入 `/plugins`，切到 **Custom** 标签页，输入 `plugins/kimi-counterweight` 的绝对路径。Kimi 会提示这是第三方插件，选择 **Trust and install**，再运行 `/new` 或 `/reload` 使改动生效。从 GitHub URL 安装没有运行过。Kimi 的源码接受 `tree` URL，可以指向插件目录，但没有试过。
+
+Kimi Code 把 setup skill 列为 `counterweight:cw-setup`。斜杠形式 `/skill:counterweight:cw-setup` 没有运行过。
+
+**Hermes Agent**
+
+把插件复制到 Hermes 主目录的插件目录，启用它，并调高 hook 超时。hook 超时限制结束检查的时长，默认的 30 秒只给检查留下约 15 秒。
+
+```sh
+cp -r plugins/hermes-counterweight ~/.hermes/plugins/counterweight
+hermes plugins enable counterweight
+hermes config set plugins.hook_callback_timeout 600
+```
+
+设置了 `HERMES_HOME` 时，改为复制到 `$HERMES_HOME/plugins/counterweight`。用 `hermes plugins install` 从 Git URL 安装没有运行过。
+
 ### 试用
 
 1. 创建练习仓库：
@@ -95,9 +117,9 @@ opencode plugin add github:nerdneilsfield/codex-counterweight
    cmd = ["node", "--check", "hello.js"]
    ```
 
-3. 在该目录启动你的宿主：`codex`、`claude` 或 `opencode`。
+3. 在该目录启动你的宿主：`codex`、`claude` 或 `opencode`。Kimi Code 和 Hermes Agent 测试过的形式是一次性命令 `kimi -p "<请求>"` 和 `hermes -z "<请求>"`，`<请求>` 是第 5 步的文字。
 
-4. 宿主询问时，信任插件。Codex 显示 **Hooks need review**，信任之前插件不会运行。Claude Code 显示项目信任对话框。OpenCode 加载插件时没有对话框。
+4. 宿主询问时，信任插件。Codex 显示 **Hooks need review**，信任之前插件不会运行。Claude Code 显示项目信任对话框。OpenCode 加载插件时没有对话框。Kimi Code 只在安装插件时询问信任。Hermes Agent 在运行 `hermes plugins enable` 之后加载插件。
 
 5. 向模型发送以下请求：
 
@@ -111,7 +133,7 @@ opencode plugin add github:nerdneilsfield/codex-counterweight
 [counterweight] 结束检查通过：`node --check hello.js` 退出码 0（0.1s）
 ```
 
-OpenCode 在检查通过时什么也不显示。要确认检查运行过，在 `.cw/meter.jsonl` 里找 `check` 事件：
+OpenCode 在检查通过时什么也不显示。Kimi Code 和 Hermes Agent 在回合结束时没有显示通道，它们把报告放在下一次提交的请求里交付。要在这些宿主上确认检查运行过，在 `.cw/meter.jsonl` 里找 `check` 事件：
 
 ```sh
 grep '"event":"check"' .cw/meter.jsonl
@@ -119,7 +141,7 @@ grep '"event":"check"' .cw/meter.jsonl
 
 检查通过的那一行含有 `"outcome":"passed"`。
 
-用到自己的项目时，把 `cmd` 换成会自行退出的命令，例如 `["npm", "test"]`。每个宿主也有一个 setup 命令，用来检查插件是否生效并帮你写这个文件：Codex 是 `$cw-setup`，Claude Code 是 `/counterweight:cw-setup`，OpenCode 是 `/cw-setup`。Claude Code 的命令带插件名作为命名空间。
+用到自己的项目时，把 `cmd` 换成会自行退出的命令，例如 `["npm", "test"]`。Codex、Claude Code、OpenCode 和 Kimi Code 有 setup 命令，用来检查插件是否生效并帮你写这个文件：Codex 是 `$cw-setup`，Claude Code 是 `/counterweight:cw-setup`，OpenCode 是 `/cw-setup`，Kimi Code 是 skill `counterweight:cw-setup`。Claude Code 和 Kimi Code 的命令带插件名作为命名空间。Hermes Agent 没有 setup 命令，文件要手写。
 
 ## 工作流程
 
@@ -147,7 +169,7 @@ grep '"event":"check"' .cw/meter.jsonl
 回合结束，你看到结果
 ```
 
-一个用户回合最多续跑两次：检查一次，审查发现一次。之后插件只报告结果，由你决定下一步。改动从回合开始时算起：回合之前就没提交的文件不会触发审查，回合中途提交也不会让这一轮的改动消失。续跑之后的那次审查看到整个回合的改动。
+一个用户回合最多续跑两次：检查一次，审查发现一次。Kimi Code 例外：它每回合只运行一次 `Stop` hook，所以检查和审查发现共用一次续跑，检查优先。之后插件只报告结果，由你决定下一步。改动从回合开始时算起：回合之前就没提交的文件不会触发审查，回合中途提交也不会让这一轮的改动消失。续跑之后的那次审查看到整个回合的改动。
 
 ### 分阶段启用
 
@@ -168,8 +190,8 @@ grep '"event":"check"' .cw/meter.jsonl
 
 ### 看懂结果
 
-- 配了 `[check]` 后，每轮结束都有一行 `[counterweight]`。看不到这一行，就说明检查没有运行。OpenCode 例外：检查通过时不显示，要看 `.cw/meter.jsonl`。
-- 会话真正开始时（startup 和 clear，不含压缩和 resume），如果没有 `.cw/project.toml` 或没有 `[check]`，Codex 和 Claude Code 会显示一行提示：回合结束时不会跑检查。OpenCode 没有显示通道，只在 `inject` 事件里记 `"check": false`。
+- 配了 `[check]` 后，每轮结束都有一行 `[counterweight]`。看不到这一行，就说明检查没有运行。OpenCode 例外：检查通过时不显示，要看 `.cw/meter.jsonl`。Kimi Code 和 Hermes Agent 在下一次提交请求时才显示这一行，它是插件追加到请求里的一条消息，模型也看得到。
+- 会话真正开始时（startup 和 clear，不含压缩和 resume），如果没有 `.cw/project.toml` 或没有 `[check]`，Codex 和 Claude Code 会显示一行提示：回合结束时不会跑检查。OpenCode 没有显示通道，只在 `inject` 事件里记 `"check": false`。Kimi Code 和 Hermes Agent 把同样的一行随会话的第一个请求发出。
 - `.cw/pending.md` 里有条目时，回合结束行末尾附 `待批 N 条`。没有检查结果时单独一行。OpenCode 不显示，因为那要多花一次模型调用。
 - 自动审查的角色没跑完时，会有一行 `[counterweight] 自动审查未完成：<角色> <原因>`。它不改变检查结果，也不让回合续跑。OpenCode 请模型转告一次，这要多花一次模型调用。
 - 报告写着未通过且不再自动重试，说明那次修复没有解决问题。你可以发新请求，也可以自己修。新请求会重新获得一次修复机会。
@@ -178,7 +200,7 @@ grep '"event":"check"' .cw/meter.jsonl
 
 ## 宿主差异
 
-除下表列出的几点外，本文其余部分描述的行为在三个宿主上相同。
+除下面两张表列出的几点外，本文其余部分描述的行为在五个宿主上相同。第一张表是 Codex CLI、Claude Code 和 OpenCode。
 
 | | Codex CLI | Claude Code | OpenCode |
 | --- | --- | --- | --- |
@@ -191,6 +213,25 @@ grep '"event":"check"' .cw/meter.jsonl
 | 模型写法 | 不含空白的 Codex 模型名称 | 不含空白的 Claude Code 别名或完整模型 id | `provider/model` |
 | `[roles] sandbox` | 接受 | 拒绝 | 拒绝 |
 | setup 命令 | `$cw-setup` | `/counterweight:cw-setup` | `/cw-setup` |
+
+第二张表是 Kimi Code 和 Hermes Agent，它们与其他宿主的差别更大：两者在回合结束时都没有显示通道，并且都限制检查和角色的运行时长。
+
+| | Kimi Code | Hermes Agent |
+| --- | --- | --- |
+| 运行检查的回合 | 每个正常结束的回合。 | 只有改过代码的回合，因为检查挂在 `pre_verify` 上。只回答问题的回合没有检查。 |
+| 检查结果 | 随下一次提交的请求交付，是追加到请求里的一条消息。 | 随下一个回合交付，放在插件加到请求里的上下文中。 |
+| 每回合续跑次数 | 一次。检查和审查发现共用，检查优先。修复回合之后 Kimi 不再运行 `Stop` hook，所以修复结果不会再被检查。 | 最多两次：检查一次，审查发现一次。`attempt` 到 2 之后插件不再续跑。 |
+| 时间限制 | hook 超时 600 秒。检查最多 300 秒，每个角色最多 270 秒。 | hook 超时是 `plugins.hook_callback_timeout`（默认 30，最大 600 秒）。检查取其一半（最多 300 秒），每个角色取 40%（最多 270 秒）。 |
+| 受保护的工具 | `Write`、`Edit` | `write_file`、`patch`（含 V4A 多文件补丁） |
+| 检查命令的工具 | `Bash` | `terminal` |
+| 角色限制 | `kimi -p --agent-file`，只有 `Read`、`Grep`、`Glob` 三个工具。`planner` 没有工具。 | `hermes -z -t file`。插件在角色会话里拦截 `read_file` 和 `search_files` 以外的所有工具。`planner` 用 `-t todo`，所有工具都被拦截。 |
+| 角色的运行方式 | 插件的 MCP server 加 `kimi -p`。 | 只有自动运行，通过 `hermes -z`。没有角色工具。 |
+| 角色步数上限 | 30 步（`research` 80，`planner` 1）。 | 没有。角色只受超时限制。 |
+| 计量中的用量 | 会话 `wire.jsonl` 里的 `usage.record` 行，每行记一次，`cost_total` 为 `null`。 | `post_api_request`，每个 `api_request_id` 记一次，`cost_total` 为 `null`。 |
+| 配置文件 | `.cw/kimi.toml` | `.cw/hermes.toml` |
+| 模型写法 | Kimi 的 `config.toml` 里定义的模型别名，不含空白 | `provider/model`（按第一个斜杠切成 `--provider` 和 `-m`），或只写模型名；都不含空白 |
+| `[roles] sandbox` | 拒绝 | 拒绝 |
+| setup 命令 | skill `counterweight:cw-setup` | 无 |
 
 ## 插件做什么
 
@@ -205,6 +246,16 @@ grep '"event":"check"' .cw/meter.jsonl
 | 把 token 用量追加到 `.cw/meter.jsonl` | 模型响应 | 回合结束和会话结束时扫描 transcript | 完成的步骤 |
 | 运行检查，然后运行已开启的自动任务 | 回合结束 | 回合结束 | 会话空闲 |
 
+| 动作 | Kimi Code | Hermes Agent |
+| --- | --- | --- |
+| 注入工作约束 | 会话的第一个请求（`UserPromptSubmit`） | 会话的第一个回合（`pre_llm_call`） |
+| 保存请求原文；`auto.review` 或 `auto.chronicle` 开启时，再取一份标记回合开始的快照 | `UserPromptSubmit` | `pre_llm_call` |
+| 拒绝写入受保护路径；可选地在第一次改源码前暂停 | `Write`、`Edit` 的 `PreToolUse` | `write_file`、`patch` 的 `pre_tool_call` |
+| 记录本轮的 shell 命令和文件写入，供 `auto.review` 使用 | `Bash`、`Write`、`Edit` | `terminal`、`write_file`、`patch` |
+| 把 token 用量追加到 `.cw/meter.jsonl` | 每次提交请求、`Stop` 和 `SessionEnd` 时扫描 `wire.jsonl` | `post_api_request` |
+| 运行检查，然后运行已开启的自动任务 | `Stop` | `pre_verify` |
+| 写 chronicle 事件 | 回合不续跑时的 `Stop` | `on_session_end` |
+
 没有 `.cw/project.toml` 时，插件放行所有写入，只有写 `.cw/goal.md`、`.cw/scope.txt`（以及范围生效时范围外的写入）除外，仍然拒绝下面的高危 shell 命令，回合结束时不跑检查。以下两项对所有启用了插件的仓库都生效，即使没有配置文件：
 
 - 注入的约束会改变模型的行为。它要求模型用中文直接作答，并避免添加当前需求用不到的抽象。原文在 [`src/roles/prompts.ts`](src/roles/prompts.ts)。
@@ -218,7 +269,7 @@ grep '"event":"check"' .cw/meter.jsonl
 
 ### 结束检查
 
-插件在每个正常结束的回合运行检查，只回答问题的回合也会运行，所以要选耗时可以接受的命令。结果只看退出码。命令在仓库根目录运行，不经过 shell，因此 `npm test && npm run bundle` 不是一条合法的命令。需要组合多个检查时，把它们写进脚本。
+插件在每个正常结束的回合运行检查，只回答问题的回合也会运行，所以要选耗时可以接受的命令。Hermes Agent 例外：它只对改过代码的回合运行检查。结果只看退出码。命令在仓库根目录运行，不经过 shell，因此 `npm test && npm run bundle` 不是一条合法的命令。需要组合多个检查时，把它们写进脚本。
 
 检查失败时，插件把退出码和每条输出流最多 80 行或 16 KiB 的内容交回模型，宿主继续这一轮。每轮有一次这样的重试机会。再次失败时，插件显示结果并结束。
 
@@ -226,7 +277,7 @@ grep '"event":"check"' .cw/meter.jsonl
 
 ### 受保护路径
 
-配置加载成功后，`.cw/project.toml`、`.cw/goal.md`、`.cw/scope.txt`、`.cw/codex.toml`、`.cw/claude.toml` 和 `.cw/opencode.toml` 在所有宿主上总是受保护。`.cw/goal.md` 和 `.cw/scope.txt` 即使在 `.cw/project.toml` 缺失或非法时也受保护，因为插件不需要配置就会用到它们。只要调用中有一个路径受保护、通过符号链接指向受保护路径，或位于仓库之外，插件就拒绝整个调用。解析不出路径的调用也会被拒绝。
+配置加载成功后，`.cw/project.toml`、`.cw/goal.md`、`.cw/scope.txt`、`.cw/codex.toml`、`.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 和 `.cw/hermes.toml` 在所有宿主上总是受保护。`.cw/goal.md` 和 `.cw/scope.txt` 即使在 `.cw/project.toml` 缺失或非法时也受保护，因为插件不需要配置就会用到它们。只要调用中有一个路径受保护、通过符号链接指向受保护路径，或位于仓库之外，插件就拒绝整个调用。解析不出路径的调用也会被拒绝。
 
 ### 目标文件
 
@@ -235,11 +286,12 @@ grep '"event":"check"' .cw/meter.jsonl
 修改多久后生效，取决于宿主：
 
 - OpenCode 在顶层会话的每次模型调用时读取文件，所以修改从下一次调用开始生效。
+- Kimi Code 和 Hermes Agent 在会话的第一个请求里注入目标，之后的请求按下一条所述处理。
 - Codex 和 Claude Code 在会话开始、`/clear` 和压缩时注入目标。之后每次提交请求时，插件把文件与上次注入的版本比较。文件变了，就把新目标追加到上下文；文件被删除，就告诉模型之前的目标不再适用；文件没变，什么也不加，上下文不会每轮增长。旧版本仍留在对话历史里，新版本排在它后面。
 
 ## 配置
 
-配置放在 `.cw/` 下的两个文件里：共用的 `project.toml`，以及你的宿主对应的一个文件。插件在每个事件上都读取这两个文件，因此改动从下一个事件开始生效，不需要重启。任一文件出现未知字段，整份配置都非法。配置非法时，检查和路径保护都会停止。Codex 和 Claude Code 在会话开始和每轮结束时显示错误，OpenCode 在每轮结束时要求模型转告这个错误。
+配置放在 `.cw/` 下的两个文件里：共用的 `project.toml`，以及你的宿主对应的一个文件。插件在每个事件上都读取这两个文件，因此改动从下一个事件开始生效，不需要重启。任一文件出现未知字段，整份配置都非法。配置非法时，检查和路径保护都会停止。Codex 和 Claude Code 在会话开始和每轮结束时显示错误，OpenCode 在每轮结束时要求模型转告这个错误，Kimi Code 和 Hermes Agent 随下一个请求交付这个错误。
 
 ### `.cw/project.toml`
 
@@ -287,7 +339,7 @@ model = "nimble"
 | `router.skip_below` | 数值 | `0.1` | 模型判定有问题的概率不高于此值时，跳过审查。 |
 | `router.audit_rate` | 数值 | `0.1` | 被跳过的审查中，仍然运行的比例。 |
 
-这个文件的 `[models]` 小节属于 pi，三个宿主都会忽略它。
+这个文件的 `[models]` 小节属于 pi，五个宿主都会忽略它。
 
 ### `.cw/codex.toml`
 
@@ -315,9 +367,9 @@ sandbox = "read-only"
 
 Linux 上的 Codex 沙箱依赖非特权 user namespace。如果 `kernel.apparmor_restrict_unprivileged_userns` 为 `1`，`bubblewrap` 无法启动，只读角色也读不了文件。
 
-### `.cw/claude.toml` 和 `.cw/opencode.toml`
+### `.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 和 `.cw/hermes.toml`
 
-这两个文件可选，存放 Claude Code 和 OpenCode 的角色模型。它们的 `[models]` 小节与 `codex.toml` 相同，没有 `[roles]` 小节，因为角色靠工具或权限限制，不靠沙箱。任一文件里出现 `[roles]` 小节，配置就非法。
+这几个文件可选，存放 Claude Code、OpenCode、Kimi Code 和 Hermes Agent 的角色模型。它们的 `[models]` 小节与 `codex.toml` 相同，没有 `[roles]` 小节，因为角色靠工具或权限限制，不靠沙箱。任一文件里出现 `[roles]` 小节，配置就非法。
 
 ```toml
 # .cw/claude.toml：别名或完整模型 id，不含空白
@@ -333,11 +385,25 @@ review = "anthropic/claude-sonnet-4-5"
 over_review = "anthropic/claude-sonnet-4-5"
 ```
 
-OpenCode 按第一个斜杠切分模型名称，所以斜杠之后的模型 id 里可以再有斜杠。没有配置模型的角色不可用。
+```toml
+# .cw/kimi.toml：Kimi 的 config.toml 里定义的别名，不含空白
+[models]
+review = "cw/terra"
+over_review = "cw/terra"
+```
+
+```toml
+# .cw/hermes.toml：provider/model，或只写模型名；不含空白
+[models]
+review = "custom/gpt-5.6-terra"
+over_review = "custom/gpt-5.6-terra"
+```
+
+OpenCode 按第一个斜杠切分模型名称，所以斜杠之后的模型 id 里可以再有斜杠。Hermes Agent 同样按第一个斜杠切分，斜杠之前的部分作为 `--provider` 传入。没有配置模型的角色不可用。
 
 ## 角色工具
 
-插件向模型提供五个工具。在 Codex 和 Claude Code 上，由 MCP server 提供，每次调用启动一个一次性的 `codex exec` 或 `claude -p` 子进程，子进程关闭了 hook。在 OpenCode 上，由插件注册这些工具，每次调用在调用方会话的子会话里运行。在角色自己的会话里，这些工具会报告不可用，所以角色不能再启动角色。每个工具都接受可选的 `timeout_s`，范围 300 到 1800。超时后，返回结果会给出下一次可用的值。
+插件向模型提供五个工具。在 Codex、Claude Code 和 Kimi Code 上，由 MCP server 提供，每次调用启动一个一次性的 `codex exec`、`claude -p` 或 `kimi -p` 子进程。在 OpenCode 上，由插件注册这些工具，每次调用在调用方会话的子会话里运行。Hermes Agent 没有角色工具，它的角色只通过 `[auto]` 运行。在角色自己的会话里，这些工具会报告不可用，所以角色不能再启动角色。Codex 和 Claude Code 在子进程里关闭了 hook。Kimi Code 和 Hermes Agent 做不到这一点：Kimi 的 runner 在子进程环境里设置 `CW_ROLE=1`，插件的每个 hook 看到它就退出，MCP server 则拒绝角色调用。Hermes 的 hook 运行在所有会话共用的 gateway 进程里，它不继承调用方的环境变量，所以插件按提示第一行的标记 `[counterweight-role:read]` 或 `[counterweight-role:none]` 认出角色会话，并给 Node 进程自己设置 `CW_ROLE=1`。每个工具都接受可选的 `timeout_s`，范围 300 到 1800。超时后，返回结果会给出下一次可用的值。
 
 | 工具 | 输入 | 结果 |
 | --- | --- | --- |
@@ -355,7 +421,7 @@ OpenCode 按第一个斜杠切分模型名称，所以斜杠之后的模型 id �
 
 ## 自动运行
 
-默认由模型决定是否调用角色工具。`[auto]` 的字段让插件自己运行这些工具。每个字段都需要你的宿主文件（`.cw/codex.toml`、`.cw/claude.toml` 或 `.cw/opencode.toml`）里有对应模型。缺少模型时，该字段会被关闭，检查和路径保护继续工作。Codex 和 Claude Code 在会话开始时提示。
+默认由模型决定是否调用角色工具。`[auto]` 的字段让插件自己运行这些工具。每个字段都需要你的宿主文件（`.cw/codex.toml`、`.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 或 `.cw/hermes.toml`）里有对应模型。缺少模型时，该字段会被关闭，检查和路径保护继续工作。Codex 和 Claude Code 在会话开始时提示，Kimi Code 和 Hermes Agent 随第一个请求提示。
 
 | 字段 | 需要的模型 | 行为 |
 | --- | --- | --- |
@@ -369,19 +435,19 @@ OpenCode 按第一个斜杠切分模型名称，所以斜杠之后的模型 id �
 
 审查和检查互相独立：自动运行失败或超时只是不产生文字，不会改变检查结果。`auto.pause` 的计划只是建议，模型可以不同意并重新发起编辑。planner 失败、超时或读不到会话记录时，编辑照常执行。
 
-检查的修复轮和审查的修复轮分开计数，所以一个用户回合最多续跑两次。在 OpenCode 上，检查和自动运行只作用于顶层会话，`auto.pause` 跳过子会话。
+检查的修复轮和审查的修复轮分开计数，所以一个用户回合最多续跑两次。在 Kimi Code 上两者共用一次，检查优先，所以检查失败的那一轮不会再做审查。在 OpenCode 上，检查和自动运行只作用于顶层会话，`auto.pause` 跳过子会话。
 
 ## 防护和记录
 
-**高危命令。** 所有宿主的 shell 工具都会拒绝最危险的几类命令，有没有配置都一样：`rm` 带递归和强制，目标是 `/`、`/*`、`~` 或 `$HOME`；强制推送（`--force`、`-f` 或带 `+` 的 refspec）到 `main` 或 `master`（`--force-with-lease` 放行）；`mkfs`；`dd` 的 `of=/dev/...`（`/dev/null` 除外）。命令按未加引号的 `;`、`&&`、`||`、`|` 和换行切开，逐段判断。引号里的文本只是参数，所以 `git commit -m "rm -rf /"` 能通过。`bash -c`、命令替换和变量拼接不检查。这只防手滑，不是安全边界。
+**高危命令。** 所有宿主的 shell 工具（Kimi Code 的 `Bash`，Hermes Agent 的 `terminal`）都会拒绝最危险的几类命令，有没有配置都一样：`rm` 带递归和强制，目标是 `/`、`/*`、`~` 或 `$HOME`；强制推送（`--force`、`-f` 或带 `+` 的 refspec）到 `main` 或 `master`（`--force-with-lease` 放行）；`mkfs`；`dd` 的 `of=/dev/...`（`/dev/null` 除外）。命令按未加引号的 `;`、`&&`、`||`、`|` 和换行切开，逐段判断。引号里的文本只是参数，所以 `git commit -m "rm -rf /"` 能通过。`bash -c`、命令替换和变量拼接不检查。这只防手滑，不是安全边界。
 
 **写入范围。** `.cw/scope.txt` 存在且有内容时，写文件的工具只能写这些前缀之下的路径。每行一个仓库相对路径前缀，空行和 `#` 开头的行忽略；`src` 管 `src` 和 `src/a.ts`，不管 `srcx`。`.cw/` 下的路径不受限制，文件本身始终受保护。没有 `project.toml` 时范围也生效，会跟随符号链接，只管写文件的工具，不管 shell。
 
-**角色步数上限。** 角色最多 30 步（`research` 80，`planner` 1）。一步是一次模型请求或工具调用，各宿主按自己能观察到的数：Claude Code 用 `--max-turns`（`claude --help` 没列这个参数，但它有效），Codex 数 `codex exec --json` 输出里已完成的工具 item，OpenCode 数 `session.step.ended` 事件。超限的角色返回 `已达 <n> 步上限，已终止，拆小输入后重试`，计量事件记 `outcome: "budget"`，不重试。token 不作为上限，因为 Codex 只在结束时给出。审查角色还被告知只读 diff 涉及的文件和直接调用方。
+**角色步数上限。** 角色最多 30 步（`research` 80，`planner` 1）。一步是一次模型请求或工具调用，各宿主按自己能观察到的数：Claude Code 用 `--max-turns`（`claude --help` 没列这个参数，但它有效），Codex 数 `codex exec --json` 输出里已完成的工具 item，OpenCode 数 `session.step.ended` 事件，Kimi Code 数 `kimi -p --output-format stream-json` 输出里带工具调用的助手消息。Hermes Agent 不报告步数，所以它的角色没有步数上限。超限的角色返回 `已达 <n> 步上限，已终止，拆小输入后重试`，计量事件记 `outcome: "budget"`，不重试。token 不作为上限，因为 Codex 只在结束时给出。审查角色还被告知只读 diff 涉及的文件和直接调用方。
 
-**计量事件。** 注入发生时写 `inject`：`{"host","version","goal","check"}`。Codex 和 Claude Code 在 `SessionStart` 写，OpenCode 在顶层会话第一次模型调用时写。评测可以读它判断是否真的注入了。
+**计量事件。** 注入发生时写 `inject`：`{"host","version","goal","check"}`。Codex 和 Claude Code 在 `SessionStart` 写，OpenCode 在顶层会话第一次模型调用时写，Kimi Code 和 Hermes Agent 在会话的第一个请求里写。评测可以读它判断是否真的注入了。
 
-**Chronicle。** `~/.agents/chronicle/` 存在时，回合结束（不是修复续跑）会按 steward 的 chronicle 布局写 `events/<machine>/<id>.json` 和 `evidence/<machine>/<id>.json`。目录不会被创建。`outcome`：检查通过为 `ok`，失败为 `failed`，取消为 `cancelled`，没有检查为 `unknown`；证据是检查报告，或者说明原因的 `gap`。`project` 只从 `projects.yaml` 里 `/绝对路径: id` 形式的行读取，读不到写 `null`。写入失败不影响本轮。Claude Code 按 Esc 不触发 `Stop`，所以那里取消的回合没有事件。
+**Chronicle。** `~/.agents/chronicle/` 存在时，回合结束（不是修复续跑）会按 steward 的 chronicle 布局写 `events/<machine>/<id>.json` 和 `evidence/<machine>/<id>.json`。目录不会被创建。`outcome`：检查通过为 `ok`，失败为 `failed`，取消为 `cancelled`，没有检查为 `unknown`；证据是检查报告，或者说明原因的 `gap`。`project` 只从 `projects.yaml` 里 `/绝对路径: id` 形式的行读取，读不到写 `null`。写入失败不影响本轮。Claude Code 按 Esc 不触发 `Stop`，所以那里取消的回合没有事件。Kimi Code 的事件来自 `Stop`，被 Kimi 续跑的回合没有事件，因为 Kimi 不会再为它运行 `Stop`。Hermes Agent 由 `on_session_end` 每回合写一条：没有改代码的回合 `outcome` 为 `unknown`，`gap` 写明该回合的退出原因；被中断的回合为 `cancelled`。
 
 ## 与 pi 共用 `.cw`
 
@@ -429,16 +495,48 @@ OpenCode：
 - 用量来自完成的步骤，记录输入、输出和缓存 token，推理 token 不单独记录。
 - 插件使用的空闲回调在 OpenCode 里叫 `experimental.idle`，以后可能改变。
 
+Kimi Code：
+
+- Kimi Code 在回合结束时没有显示通道，所以插件把报告存下来，追加到下一次提交的请求里。会话的最后一个回合，或一次性运行时，没有人会看到它，但它仍然作为 `check` 事件留在 `.cw/meter.jsonl`。
+- Kimi 每回合只运行一次 `Stop` hook。修复回合之后不再有 hook 运行，所以插件不检查修复是否生效，那一回合也不写 chronicle 事件。下一个回合结束时检查会再次运行。
+- 600 秒的时间预算包括检查（最多 300 秒）、审查者（最多 270 秒，并行）和之后的史官（最多 270 秒）。三者都跑得很久时，总和超过 600 秒。读 Kimi 打包的源码得知，这时 Kimi 会杀掉 hook 并让回合结束，这一点没有运行验证。
+- 默认 `timeout_s = 600` 的检查，报告里总会有 `check.timeout_s=600 超过上限，实际超时 300s`。把 `check.timeout_s` 设为 300 或更小可以避免这条说明。
+- MCP server 从父进程（Kimi）的工作目录定位仓库，读的是 `/proc`，只有 Linux 有。读不到时退回 `PWD` 变量。它不为角色工具记录会话。
+- 一次性运行（`kimi -p`）里 Kimi 不运行 `SessionEnd`，所以插件不会清理 `$KIMI_CODE_HOME/counterweight` 下的回合状态（没设这个变量时是 `~/.kimi-code/counterweight`）。用量仍会在每次提交请求和 `Stop` 时记录。
+- 每次角色调用都会在 Kimi 的会话列表里留下一个会话，插件不会删除它。被插件中止的角色（步数上限或超时）没有用量记录，因为会话 id 只在运行结束时给出。
+- 超过 100,000 字节的角色输入放不进命令行，插件把它写进文件，让角色去读。`planner` 没有工具，这么长的输入对它会失败，`auto.pause` 放行这次编辑。
+- 用量行的 `cost_total` 为 `null`。一条用量记录没有自己的 id，所以插件按 agent、时间、模型和四个 token 数识别它。
+- 角色运行器依赖 `kimi -p` 的 stream-json 行和 `wire.jsonl` 的格式。
+- setup skill 的斜杠形式 `/skill:counterweight:cw-setup`，以及交互式终端界面里回合结束时的行为，没有测试。
+
+Hermes Agent：
+
+- Hermes Agent 也没有给插件在回合结束时显示文字的通道。插件把报告追加到下一个回合的上下文里。`on_session_end` 每个回合之后都会触发，所以它能存下待批条数，但不能显示任何东西。
+- 检查只在 `pre_verify` 里运行，Hermes 在回合改过代码时才触发它。只回答问题的回合没有检查，它的 chronicle 事件 `outcome` 为 `unknown`。
+- Hermes 用 `plugins.hook_callback_timeout`（默认 30 秒，最大 600）限制插件的 `pre_verify` 回调，超时后让回合结束。在默认值下做的测试里，一个睡眠 35 秒的回调返回了续跑指令，Hermes 没有采用。所以插件把检查和角色缩小到配置的值之内，报告里写明实际用的值。不调高这项设置时，超过 15 秒的检查总会超时。
+- 插件通过 Hermes 的 `resolve_agent_cwd()` 找项目，找不到时退到绝对路径工具参数、`workdir` 或 `changed_paths` 所在的仓库，再找不到就不猜：拒绝这次写入，跳过检查，并在下一个回合说明。`resolve_agent_cwd()` 是 Hermes 的内部函数，以后可能改变。
+- hook 运行在所有会话共用的 gateway 进程里，它不继承你的环境变量。插件在那里读不到 `CW_ROLE`，所以按提示第一行认出角色。用户消息以 `[counterweight-role:` 开头时，该会话会变成只读。
+- 角色只能读和搜文件，是因为插件拦截了它会话里的其他工具，而 `-t file` 仍然提供 `write_file` 和 `patch`。在一次真实的 `hermes -z` 运行里，提示以标记开头并要求 `write_file`，插件拒绝了这次调用，没有文件被创建。
+- 角色没有步数上限。超时的角色被杀掉，除非 Hermes 已经写出 usage 文件，否则它的用量丢失。
+- PAUSE 给 planner 的是回合开始之前的对话，加上本回合到目前为止的工具调用和结果。
+- 用量取自 Hermes 在 `post_api_request` 里报告的数：`input_tokens` 和缓存计数照 Hermes 给的记录。生成标题之类的辅助调用不记录。用量行的 `cost_total` 为 `null`。
+- 在新的 `HERMES_HOME` 里第一次运行 Hermes 会把它的 Python 依赖装进去，要花一些时间，约占 400 MB。
+- 交互式 chat、终端界面和消息平台没有测试，用 `hermes plugins install` 安装插件也没有测试。
+
 ## 常见问题
 
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | Codex 上回合结束时没有 `[counterweight]` 这一行 | hook 未被信任，或没有 `[check]` | 在 Codex 里打开 `/hooks` 并信任 hook，再确认 `.cw/project.toml` 有 `[check]` 小节。 |
 | Claude Code 上回合结束时没有 `[counterweight]` 这一行 | 插件未启用、项目未被信任，或没有 `[check]` | 启用插件并接受信任对话框。确认会话上下文里有 `Counterweight <version> active`，并确认 `.cw/project.toml` 有 `[check]` 小节。 |
+| Kimi Code 或 Hermes Agent 上回合结束后什么也没出现 | 这两个宿主在回合结束时都没有显示通道 | 发送下一个请求，或在 `.cw/meter.jsonl` 里找 `check` 事件。Hermes Agent 上还要确认这一轮改了代码，只回答问题的回合没有检查。 |
+| Hermes Agent 没有运行检查，`.cw/meter.jsonl` 也没有内容 | 插件没有在 gateway 里启用，`node` 不在 gateway 的 `PATH` 上，或会话目录不在 Git 仓库里 | 运行 `hermes plugins list`，把 `node` 放进 gateway 的 `PATH`（改完后运行 `hermes gateway restart`），并在 Git 仓库里启动 Hermes。 |
+| Hermes 的报告说检查的实际超时是 15 秒 | `plugins.hook_callback_timeout` 还是默认的 30 秒 | 运行 `hermes config set plugins.hook_callback_timeout 600`。 |
+| Kimi Code 没有运行 hook | 插件没有安装或启用，或 Kimi 还没有重新加载它 | 打开 `/plugins` 确认 `counterweight` 已启用，然后运行 `/new` 或 `/reload`。 |
 | OpenCode 上回合结束时什么也没出现 | OpenCode 在检查通过时什么也不显示 | 在 `.cw/meter.jsonl` 里找 `check` 事件。找不到时，确认 `.cw/project.toml` 有 `[check]` 小节，并确认插件已安装。 |
 | 报告显示 `配置非法` | `.cw/` 下的文件有未知字段或非法值 | 按消息里的字段名修改。 |
 | 模型改不了受保护路径下的文件 | 路径命中了 `protect.paths` | 自己修改该文件，或调整 `protect.paths`。 |
-| 模型改不了 `.cw/` 下的文件 | `project.toml`、`goal.md` 和三个宿主文件总是受保护 | 自己修改。 |
+| 模型改不了 `.cw/` 下的文件 | `project.toml`、`goal.md`、`scope.txt` 和五个宿主文件总是受保护 | 自己修改。 |
 | 角色工具报告 `未配置 [models].<role>` | 该角色没有配置模型 | 在你的宿主文件的 `[models]` 里添加。 |
 | Codex 上角色读不了文件 | 这台机器上 Codex 沙箱无法启动 | 检查 `kernel.apparmor_restrict_unprivileged_userns`，或设置 `roles.sandbox = "none"`。 |
 | 角色报告 `未正常结束` | 角色的回合没有完成 | 查看消息里的原因，然后重新调用工具。 |
@@ -455,9 +553,11 @@ npm test
 
 `src/core/` 下的 `budget.ts`、`danger.ts`、`scope.ts`、`chronicle-event.ts` 和 `pending.ts` 与 [pi-counterweight](https://github.com/nerdneilsfield/pi-counterweight) 里的同名文件逐字节相同。发布前运行 `npm run check:sync` 逐字节比较；`../pi-counterweight` 不存在时会说明并跳过。`npm test` 不调用它。
 
-`npm test` 会先构建产物。测试把假的 `codex` 或 `claude` 可执行文件放在 `PATH` 最前面，并用假的 ctx 对象驱动 OpenCode 插件，不需要模型凭据。`plugins/codex-counterweight/dist/`、`plugins/claude-counterweight/dist/` 和 `plugins/opencode-counterweight/index.js` 下的产物要提交，因为安装插件时不会运行 `npm install`。提交源码改动前先运行 `npm run bundle`。
+`npm test` 会先构建产物。测试把假的 `codex`、`claude`、`kimi` 或 `hermes` 可执行文件放在 `PATH` 最前面，并用假的 ctx 对象驱动 OpenCode 插件，不需要模型凭据。Hermes 插件的 Python 文件用 Hermes API 的桩和假的 `node` 加载来测试。`plugins/codex-counterweight/dist/`、`plugins/claude-counterweight/dist/`、`plugins/kimi-counterweight/dist/`、`plugins/hermes-counterweight/dist/` 和 `plugins/opencode-counterweight/index.js` 下的产物要提交，因为安装插件时不会运行 `npm install`。提交源码改动前先运行 `npm run bundle`。
 
-设计和实测的 Codex 行为记录在 [`docs/superpowers/specs/2026-11-04-codex-counterweight-design.md`](docs/superpowers/specs/2026-11-04-codex-counterweight-design.md) 和 [`docs/plans/2026-11-04-v2-roles.md`](docs/plans/2026-11-04-v2-roles.md)。Claude Code 和 OpenCode 的设计，以及两个宿主的实测行为，记录在 [`docs/plans/2026-11-04-claude-opencode.md`](docs/plans/2026-11-04-claude-opencode.md)。
+设计和实测的 Codex 行为记录在 [`docs/superpowers/specs/2026-11-04-codex-counterweight-design.md`](docs/superpowers/specs/2026-11-04-codex-counterweight-design.md) 和 [`docs/plans/2026-11-04-v2-roles.md`](docs/plans/2026-11-04-v2-roles.md)。Claude Code 和 OpenCode 的设计，以及两个宿主的实测行为，记录在 [`docs/plans/2026-11-04-claude-opencode.md`](docs/plans/2026-11-04-claude-opencode.md)。Kimi Code 和 Hermes Agent 的设计，以及在真实二进制上测得的事件和载荷，记录在 [`docs/plans/2026-11-05-kimi-hermes.md`](docs/plans/2026-11-05-kimi-hermes.md)。
+
+Kimi Code 和 Hermes Agent 的下列功能，用真实二进制和真实模型（`gpt-5.6-terra`，经本地 OpenAI 兼容代理，每个宿主用一个临时主目录）运行过：带一次修复的结束检查、受保护路径、`goal.md`、`scope.txt`、高危命令拦截、PAUSE、`auto.review`、`auto.chronicle`、待批条数、注入、用量、角色工具（仅 Kimi Code）和随下一个请求交付报告。测试套件里的其余内容对着假的可执行文件运行，没有对着模型运行。
 
 ## 许可证
 
