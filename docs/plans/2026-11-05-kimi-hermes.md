@@ -52,5 +52,5 @@ Hermes：`HERMES_HOME` 可隔离。三条路线：`config.yaml` 的 shell hook�
 
 - [x] 共用层
 - [x] Kimi Code
-- [ ] Hermes
+- [x] Hermes
 - [ ] 文档

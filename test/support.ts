@@ -165,3 +165,46 @@ export async function installFakeKimi(
   await chmod(path.join(sandbox.bin, "kimi"), 0o755);
   await writeFile(path.join(sandbox.bin, "script.json"), JSON.stringify(script));
 }
+
+export const HERMES_PLUGIN_ROOT = path.resolve("plugins/hermes-counterweight");
+export const HERMES_HOOK = path.join(HERMES_PLUGIN_ROOT, "dist/hook.cjs");
+
+/** 带假 hermes 的环境：HERMES_HOME 在 sandbox.data 下，Node 入口的回合状态也落在那里。 */
+export function hermesEnv(sandbox: Sandbox, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    PATH: `${sandbox.bin}${path.delimiter}${process.env.PATH ?? ""}`,
+    HERMES_HOME: path.join(sandbox.data, "hermes-home"),
+    HOME: sandbox.data,
+  };
+  delete env.PLUGIN_DATA;
+  delete env.CLAUDE_PLUGIN_DATA;
+  delete env.CW_ROLE;
+  return { ...env, ...extra };
+}
+
+/** 像 `__init__.py` 那样把一个钩子事件交给 Node 入口；`cwd` 是 Python 侧给的会话目录，默认是仓库。 */
+export function runHermesHook(
+  sandbox: Sandbox, input: Record<string, unknown>, extra: NodeJS.ProcessEnv = {},
+): Promise<{ out: any; stdout: string; stderr: string; code: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("node", [HERMES_HOOK], { stdio: ["pipe", "pipe", "pipe"], env: hermesEnv(sandbox, extra) });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ out: stdout === "" ? null : JSON.parse(stdout), stdout, stderr, code }));
+    child.stdin.end(JSON.stringify({ cwd: sandbox.repo, session_id: "h1", budget_s: 600, ...input }));
+  });
+}
+
+/** 把假 hermes 装到 `bin/hermes`，行为写进 `bin/script.json`。 */
+export async function installFakeHermes(
+  sandbox: Sandbox, script: { default?: Behavior; byModel?: Record<string, Behavior> },
+): Promise<void> {
+  await mkdir(sandbox.bin, { recursive: true });
+  await copyFile(path.resolve("test/fake-hermes.mjs"), path.join(sandbox.bin, "hermes"));
+  await chmod(path.join(sandbox.bin, "hermes"), 0o755);
+  await writeFile(path.join(sandbox.bin, "script.json"), JSON.stringify(script));
+}

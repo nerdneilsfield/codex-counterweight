@@ -9893,7 +9893,7 @@ async function saveGoalHash(session, hash) {
   } catch {
   }
 }
-var SESSION_FILES = /* @__PURE__ */ new Set(["turn", "note", "injected"]);
+var SESSION_FILES = /* @__PURE__ */ new Set(["turn", "note", "injected", "settled", "history"]);
 async function putSessionText(session, name, text2) {
   const dir = sessionDir(session);
   if (dir === null || !SESSION_FILES.has(name)) return;

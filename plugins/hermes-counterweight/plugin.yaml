@@ -1,0 +1,4 @@
+name: counterweight
+version: "0.1.0"
+description: Run the project's check at the end of a turn that edited code, guard protected paths, and record model usage.
+author: nerdneilsfield

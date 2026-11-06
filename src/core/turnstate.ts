@@ -147,9 +147,10 @@ export async function saveGoalHash(session: string, hash: string): Promise<void>
 }
 
 /** 会话目录下的一个小文本文件，用于没有回合 id 或没有显示渠道的宿主：当前回合、待投递的报告、是否注入过。 */
-const SESSION_FILES = new Set(["turn", "note", "injected"]);
+type SessionText = "turn" | "note" | "injected" | "settled" | "history";
+const SESSION_FILES = new Set<SessionText>(["turn", "note", "injected", "settled", "history"]);
 
-export async function putSessionText(session: string, name: "turn" | "note" | "injected", text: string): Promise<void> {
+export async function putSessionText(session: string, name: SessionText, text: string): Promise<void> {
   const dir = sessionDir(session);
   if (dir === null || !SESSION_FILES.has(name)) return;
   await mkdir(dir, { recursive: true });
@@ -157,7 +158,7 @@ export async function putSessionText(session: string, name: "turn" | "note" | "i
 }
 
 /** 读不到时为 null。 */
-export async function getSessionText(session: string, name: "turn" | "note" | "injected"): Promise<string | null> {
+export async function getSessionText(session: string, name: SessionText): Promise<string | null> {
   try {
     const dir = sessionDir(session);
     return dir === null ? null : await readFile(path.join(dir, name), "utf8");
@@ -167,9 +168,32 @@ export async function getSessionText(session: string, name: "turn" | "note" | "i
 }
 
 /** 读出并删除；读不到时为 null。 */
-export async function takeSessionText(session: string, name: "turn" | "note" | "injected"): Promise<string | null> {
+export async function takeSessionText(session: string, name: SessionText): Promise<string | null> {
   const text = await getSessionText(session, name);
   const dir = sessionDir(session);
   if (text !== null && dir !== null) await rm(path.join(dir, name), { force: true });
   return text;
+}
+
+/** 回合内追加一行（Hermes 的 PAUSE 调查记录：每个工具调用和结果一行）。写失败不影响工具调用。 */
+export async function appendTurnLine(session: string, turn: string, kind: "log", line: string): Promise<void> {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return;
+    await mkdir(dir, { recursive: true });
+    await appendFile(path.join(dir, `${turn}.${kind}`), `${line}\n`);
+  } catch {
+    // Observational only.
+  }
+}
+
+/** 读不到时为空数组。 */
+export async function loadTurnLines(session: string, turn: string, kind: "log"): Promise<string[]> {
+  try {
+    const dir = sessionDir(session);
+    if (dir === null || turn === "" || turn.includes("/") || turn.includes("..")) return [];
+    return (await readFile(path.join(dir, `${turn}.${kind}`), "utf8")).split("\n").filter((line) => line !== "");
+  } catch {
+    return [];
+  }
 }
