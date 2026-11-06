@@ -188,6 +188,13 @@ describe("CW_ROLE", () => {
 });
 
 describe("injection, reports and the chronicle", () => {
+  it("says with the first turn that the check is not configured", async () => {
+    await project("version = 1\n");
+    const first = await llm();
+    expect(first.out.context).toContain("结束检查没有配置");
+    expect((await meterLines()).find((line) => line.event === "inject")?.detail).toMatchObject({ host: "hermes", check: false });
+  });
+
   it("injects once, then goal changes, and delivers the report and the pending count with the next turn", async () => {
     await project('version = 1\n[check]\ncmd = ["true"]\n');
     await writeFile(path.join(repo, ".cw/pending.md"), "- 2026-11-05 | one\n- 2026-11-05 | two\n  detail\n");

@@ -245,6 +245,14 @@ describe("runRole", () => {
 });
 
 describe("injection and reports", () => {
+  it("says with the first prompt that the check is not configured, and names the setup skill", async () => {
+    await project("version = 1\n");
+    const first = await prompt();
+    expect(first.stdout).toContain("结束检查没有配置");
+    expect(first.stdout).toContain("/skill:counterweight:cw-setup");
+    expect((await meterLines()).find((line) => line.event === "inject")?.detail).toMatchObject({ host: "kimi", check: false });
+  });
+
   it("injects the instructions once per session, then only changes of the goal, and delivers the pending count", async () => {
     await project('version = 1\n[check]\ncmd = ["true"]\n');
     await writeFile(path.join(repo, ".cw/pending.md"), "- 2026-11-05 | one\n- 2026-11-05 | two\n  detail\n");

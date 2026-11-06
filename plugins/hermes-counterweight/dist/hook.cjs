@@ -9541,7 +9541,6 @@ async function checkScopePaths(root, cwd, paths) {
     return `[counterweight] \u8303\u56F4\u68C0\u67E5\u51FA\u9519\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${message(error)}`;
   }
 }
-var missingCheckNotice = (project, setup) => project?.check != null ? null : `[counterweight] \u7ED3\u675F\u68C0\u67E5\u6CA1\u6709\u914D\u7F6E\uFF08${project === null ? "\u6CA1\u6709 .cw/project.toml" : ".cw/project.toml \u91CC\u6CA1\u6709 [check]"}\uFF09\uFF0C\u56DE\u5408\u7ED3\u675F\u65F6\u4E0D\u4F1A\u8DD1\u68C0\u67E5\u3002\u8FD0\u884C ${setup} \u914D\u7F6E\uFF0C\u6216\u5728 .cw/project.toml \u5199 [check] cmd = ["..."]\u3002`;
 var NO_CHECK = { outcome: "unknown", evidence: { gap: "\u6CA1\u6709\u914D\u7F6E\u7ED3\u675F\u68C0\u67E5" } };
 async function endCheck(params) {
   const { root, project, session, signal } = params;
@@ -10178,8 +10177,9 @@ async function preLlm(root, session, input) {
     notes.push(`[counterweight] \u914D\u7F6E\u975E\u6CD5\uFF1A${message2(error)}`);
   }
   if (await getSessionText(session, "injected") === null) {
-    const missing = notes.length === 0 ? missingCheckNotice(project, "hermes.toml \u4E0E .cw/project.toml\uFF08\u89C1 README\uFF09") : null;
-    if (missing !== null) notes.push(missing);
+    if (notes.length === 0 && project?.check == null) {
+      notes.push(`[counterweight] \u7ED3\u675F\u68C0\u67E5\u6CA1\u6709\u914D\u7F6E\uFF08${project === null ? "\u6CA1\u6709 .cw/project.toml" : ".cw/project.toml \u91CC\u6CA1\u6709 [check]"}\uFF09\uFF0C\u6539\u8FC7\u4EE3\u7801\u7684\u56DE\u5408\u7ED3\u675F\u65F6\u4E0D\u4F1A\u8DD1\u68C0\u67E5\u3002\u5728 .cw/project.toml \u5199 [check] cmd = ["..."]\u3002`);
+    }
     for (const item of project?.autoSkipped ?? []) {
       notes.push(`[counterweight] [auto].${item} \u5DF2\u6253\u5F00\u4F46 .cw/hermes.toml \u6CA1\u914D\u5BF9\u5E94\u6A21\u578B\uFF0C\u8BE5\u9879\u89C6\u4E3A\u5173\u95ED`);
     }

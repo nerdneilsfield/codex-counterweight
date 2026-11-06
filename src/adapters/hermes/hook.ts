@@ -17,7 +17,7 @@ import { snapshotTree } from "../../core/auto.js";
 import { writeChronicleEvent, type ChronicleInput } from "../../core/chronicle-event.js";
 import { dangerousCommandIn } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
-import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, missingCheckNotice, pausePlan, type EndCheckLimits } from "../../core/flow.js";
+import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, pausePlan, type EndCheckLimits } from "../../core/flow.js";
 import { repoToplevel } from "../../core/gitstate.js";
 import { goalUpdate, readGoal, rememberGoal } from "../../core/goal.js";
 import { recordEvent, recordUsage } from "../../core/meter.js";
@@ -176,8 +176,10 @@ async function preLlm(root: string | null, session: string, input: HookInput): P
     notes.push(`[counterweight] 配置非法：${message(error)}`);
   }
   if (await getSessionText(session, "injected") === null) {
-    const missing = notes.length === 0 ? missingCheckNotice(project, "hermes.toml 与 .cw/project.toml（见 README）") : null;
-    if (missing !== null) notes.push(missing);
+    // Hermes 没有 setup 命令，missingCheckNotice 的“运行 … 配置”不适用，只提示怎么写。
+    if (notes.length === 0 && project?.check == null) {
+      notes.push(`[counterweight] 结束检查没有配置（${project === null ? "没有 .cw/project.toml" : ".cw/project.toml 里没有 [check]"}），改过代码的回合结束时不会跑检查。在 .cw/project.toml 写 [check] cmd = ["..."]。`);
+    }
     for (const item of project?.autoSkipped ?? []) {
       notes.push(`[counterweight] [auto].${item} 已打开但 .cw/hermes.toml 没配对应模型，该项视为关闭`);
     }
