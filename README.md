@@ -259,7 +259,7 @@ The plugin acts on the following events of each host.
 | Runs the check, then any automatic runs | `Stop` | `pre_verify` |
 | Writes the chronicle event | `Stop` when the turn does not continue | `on_session_end` |
 
-Without `.cw/project.toml`, the plugin allows every write except a write to `.cw/goal.md` or `.cw/scope.txt` (and a write outside an active scope), refuses the dangerous shell commands below, and runs no check at the end of a turn. Two actions still apply to every repository where the plugin is enabled:
+Without `.cw/project.toml`, the plugin allows every write except a write to `.cw/goal.md`, `.cw/scope.txt`, or `.cw/repos.txt` (and a write outside an active scope), refuses the dangerous shell commands below, and runs no check at the end of a turn. Two actions still apply to every repository where the plugin is enabled:
 
 - The injected instructions change how the model behaves. They ask for direct answers in Chinese and tell the model to avoid abstractions that no current requirement needs. The text is in [`src/roles/prompts.ts`](src/roles/prompts.ts).
 - The plugin creates `.cw/meter.jsonl` in each repository. To keep the local files out of git but still track the shared practice notes, put this in `.gitignore`:
@@ -280,7 +280,7 @@ A check that exceeds its timeout counts as a failure. The plugin sends `SIGTERM`
 
 ### Protected paths
 
-`.cw/project.toml`, `.cw/goal.md`, `.cw/scope.txt`, `.cw/codex.toml`, `.cw/claude.toml`, `.cw/opencode.toml`, `.cw/kimi.toml`, and `.cw/hermes.toml` are always protected once configuration loads, on every host. `.cw/goal.md` and `.cw/scope.txt` are protected even when `.cw/project.toml` is missing or invalid, because the plugin acts on them without any configuration. The plugin rejects the whole call if any path in it is protected, resolves through a symbolic link to a protected path, or is outside the repository. A call whose paths cannot be parsed is also rejected.
+`.cw/project.toml`, `.cw/goal.md`, `.cw/scope.txt`, `.cw/repos.txt`, `.cw/codex.toml`, `.cw/claude.toml`, `.cw/opencode.toml`, `.cw/kimi.toml`, and `.cw/hermes.toml` are always protected once configuration loads, on every host. `.cw/goal.md`, `.cw/scope.txt`, and `.cw/repos.txt` are protected even when `.cw/project.toml` is missing or invalid, because the plugin acts on them without any configuration. The plugin rejects the whole call if any path in it is protected, resolves through a symbolic link to a protected path, or is outside the repository. A call whose paths cannot be parsed is also rejected.
 
 ### Goal file
 
@@ -291,6 +291,27 @@ How soon an edit takes effect depends on the host:
 - OpenCode reads the file at every model call of a top-level session, so an edit applies to the next call.
 - Kimi Code and Hermes Agent inject the goal with the first prompt of the session, and then behave as described in the next item for later prompts.
 - Codex and Claude Code inject the goal at session start, `/clear`, and compaction. At each later prompt, the plugin compares the file with the version it injected last. If the file changed, it appends the new goal to the context. If you deleted the file, it tells the model that the earlier goal no longer applies. If the file did not change, it adds nothing, so the context does not grow every turn. The earlier version stays in the conversation history, followed by the newer one.
+
+### Several repositories
+
+If you work in one repository (B) and the task also edits sibling repositories (C, D) in the same workspace, list the siblings in `.cw/repos.txt` of B:
+
+```text
+# one path per line, relative to B or absolute
+../C
+../D
+```
+
+Blank lines and lines starting with `#` are ignored. The plugin drops an entry that does not exist, is not a git repository, is B itself, or lies inside B. Without the file, or without a valid entry, nothing in this section applies and the plugin behaves as before. The file is always protected, because it widens what the model may write.
+
+For each listed repository:
+
+- **Protected paths and scope.** A write into C is judged by C's own `.cw/project.toml` (`[protect]`) and `.cw/scope.txt`, not by B's. A C without `project.toml` has only the minimal protection: `.cw/goal.md`, `.cw/scope.txt`, and `.cw/repos.txt`. A C whose `project.toml` is invalid refuses the write. B's `scope.txt` still limits only paths inside B. Paths that belong to no listed repository are handled as before.
+- **First source edit.** With `auto.pause`, an edit of source code in C counts as the first source edit of the turn.
+- **Turn baseline.** The plugin takes a tree snapshot of every listed repository at the start of the turn, even when `auto.review` and `auto.chronicle` are off. The review, the over-review, and the chronicle report see the changes in C as well. In the diff they appear after a `# repo: C` line, with file names prefixed by `C/`.
+- **End check.** After B's check, the plugin runs the `[check]` of each listed repository that changed during the turn, in that repository, using its own `project.toml`. The turn passes only if every check passes. A report for a sibling starts with `[repo: C]`. The whole turn shares one repair: if any check fails, the model receives all failed reports together, once. A sibling check uses the time left in the host's hook budget, and the report says when it was skipped for lack of time.
+
+Pending items, usage records, the chronicle event, the goal, and the dangerous-command guard stay with B. A repository added to `repos.txt` during a turn takes effect from the next turn. The shell is still not covered: a command that writes into C is not blocked.
 
 ## Configuration
 
@@ -470,6 +491,7 @@ Limits on every host:
 - The role runner of each host depends on that host's output or API format. An update of the host can change it.
 - The plugin does not record the commands and file writes of sub-agents, so `over_review` does not see them.
 - If the snapshot at the start of the turn fails, the plugin compares against `HEAD` instead. Files that were already uncommitted then count as changes.
+- A repository listed in `.cw/repos.txt` is judged by its own `[protect]` list only when B has a `.cw/project.toml`. Without one in B, the adapters return before the path check, and the siblings get only the minimal protection of `goal.md`, `scope.txt`, and `repos.txt`.
 
 Codex CLI:
 
@@ -514,6 +536,7 @@ Kimi Code:
 
 Hermes Agent:
 
+- If the hook process cannot run or exits with an error, `pre_tool_call` refuses the tool call, so protection fails closed. Other hooks let the turn go on.
 - Hermes Agent has no display for a plugin at the end of a turn either. The plugin appends the report to the context of the next turn. `on_session_end` fires after every turn, so it can store the pending count, but it cannot show anything.
 - The check runs only in `pre_verify`, which Hermes fires when the turn edited code. A turn that only answers a question has no check, and its chronicle event has `outcome` `unknown`.
 - Hermes bounds a plugin's `pre_verify` callback by `plugins.hook_callback_timeout` (default 30 seconds, at most 600) and then lets the turn finish. In a test with the default, a callback that slept 35 seconds returned a continuation that Hermes did not use. The plugin therefore shrinks the check and the roles to fit the configured value, and the report names the value used. Without raising the setting, a check of more than 15 seconds always times out.
@@ -539,7 +562,7 @@ Hermes Agent:
 | Nothing appears at the end of a turn on OpenCode | OpenCode shows nothing for a passing check | Look for a `check` event in `.cw/meter.jsonl`. If there is none, confirm that `.cw/project.toml` has a `[check]` section and that the plugin is installed. |
 | The report says `配置非法` | A file under `.cw/` has an unknown key or an invalid value | Fix the key named in the message. |
 | The model cannot edit a file under a protected path | The path matches `protect.paths` | Edit the file yourself, or change `protect.paths`. |
-| The model cannot edit a file under `.cw/` | `project.toml`, `goal.md`, `scope.txt`, and the five host files are always protected | Edit the file yourself. |
+| The model cannot edit a file under `.cw/` | `project.toml`, `goal.md`, `scope.txt`, `repos.txt`, and the five host files are always protected | Edit the file yourself. |
 | A role tool reports `未配置 [models].<role>` | The role has no model | Add the role to `[models]` in your host file. |
 | A role cannot read files on Codex | The Codex sandbox cannot start on this machine | Check `kernel.apparmor_restrict_unprivileged_userns`, or set `roles.sandbox = "none"`. |
 | A role reports `未正常结束` | The role's turn did not complete | Read the reason in the message and call the tool again. |

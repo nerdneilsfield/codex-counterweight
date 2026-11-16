@@ -256,7 +256,7 @@ grep '"event":"check"' .cw/meter.jsonl
 | 运行检查，然后运行已开启的自动任务 | `Stop` | `pre_verify` |
 | 写 chronicle 事件 | 回合不续跑时的 `Stop` | `on_session_end` |
 
-没有 `.cw/project.toml` 时，插件放行所有写入，只有写 `.cw/goal.md`、`.cw/scope.txt`（以及范围生效时范围外的写入）除外，仍然拒绝下面的高危 shell 命令，回合结束时不跑检查。以下两项对所有启用了插件的仓库都生效，即使没有配置文件：
+没有 `.cw/project.toml` 时，插件放行所有写入，只有写 `.cw/goal.md`、`.cw/scope.txt`、`.cw/repos.txt`（以及范围生效时范围外的写入）除外，仍然拒绝下面的高危 shell 命令，回合结束时不跑检查。以下两项对所有启用了插件的仓库都生效，即使没有配置文件：
 
 - 注入的约束会改变模型的行为。它要求模型用中文直接作答，并避免添加当前需求用不到的抽象。原文在 [`src/roles/prompts.ts`](src/roles/prompts.ts)。
 - 插件会在每个仓库里创建 `.cw/meter.jsonl`。想让本地文件不进 git、又保留共享的经验笔记，在 `.gitignore` 里写：
@@ -277,7 +277,7 @@ grep '"event":"check"' .cw/meter.jsonl
 
 ### 受保护路径
 
-配置加载成功后，`.cw/project.toml`、`.cw/goal.md`、`.cw/scope.txt`、`.cw/codex.toml`、`.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 和 `.cw/hermes.toml` 在所有宿主上总是受保护。`.cw/goal.md` 和 `.cw/scope.txt` 即使在 `.cw/project.toml` 缺失或非法时也受保护，因为插件不需要配置就会用到它们。只要调用中有一个路径受保护、通过符号链接指向受保护路径，或位于仓库之外，插件就拒绝整个调用。解析不出路径的调用也会被拒绝。
+配置加载成功后，`.cw/project.toml`、`.cw/goal.md`、`.cw/scope.txt`、`.cw/repos.txt`、`.cw/codex.toml`、`.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 和 `.cw/hermes.toml` 在所有宿主上总是受保护。`.cw/goal.md`、`.cw/scope.txt` 和 `.cw/repos.txt` 即使在 `.cw/project.toml` 缺失或非法时也受保护，因为插件不需要配置就会用到它们。只要调用中有一个路径受保护、通过符号链接指向受保护路径，或位于仓库之外，插件就拒绝整个调用。解析不出路径的调用也会被拒绝。
 
 ### 目标文件
 
@@ -288,6 +288,27 @@ grep '"event":"check"' .cw/meter.jsonl
 - OpenCode 在顶层会话的每次模型调用时读取文件，所以修改从下一次调用开始生效。
 - Kimi Code 和 Hermes Agent 在会话的第一个请求里注入目标，之后的请求按下一条所述处理。
 - Codex 和 Claude Code 在会话开始、`/clear` 和压缩时注入目标。之后每次提交请求时，插件把文件与上次注入的版本比较。文件变了，就把新目标追加到上下文；文件被删除，就告诉模型之前的目标不再适用；文件没变，什么也不加，上下文不会每轮增长。旧版本仍留在对话历史里，新版本排在它后面。
+
+### 多个仓库
+
+如果你在一个仓库（B）里工作，任务还要改同一个工作区里的其他仓库（C、D），把它们写进 B 的 `.cw/repos.txt`：
+
+```text
+# 每行一个路径，相对 B 或绝对路径
+../C
+../D
+```
+
+空行和以 `#` 开头的行会被忽略。条目不存在、不是 git 仓库、就是 B 本身或位于 B 里面时，插件丢弃它。没有这个文件或没有有效条目时，本节的内容都不适用，插件的行为和以前一样。这个文件始终受保护，因为它扩大了模型可以写入的范围。
+
+对列出的每个仓库：
+
+- **受保护路径和范围。** 写入 C 时，按 C 自己的 `.cw/project.toml`（`[protect]`）和 `.cw/scope.txt` 判断，不用 B 的。C 没有 `project.toml` 时，只有最小保护：`.cw/goal.md`、`.cw/scope.txt` 和 `.cw/repos.txt`。C 的 `project.toml` 非法时拒绝写入。B 的 `scope.txt` 仍然只限制 B 里面的路径。不属于任何列出仓库的路径，处理方式和以前相同。
+- **第一次改源码。** 打开 `auto.pause` 时，在 C 里改源码也算本回合第一次改源码。
+- **回合基线。** 回合开始时，插件给每个列出的仓库拍一份树快照，即使 `auto.review` 和 `auto.chronicle` 都没打开。审查、过度审查和史官汇报都能看到 C 里的改动：diff 里它们排在 `# repo: C` 一行之后，文件名带 `C/` 前缀。
+- **结束检查。** B 的检查之后，插件对本回合有改动的每个列出仓库，在该仓库里用它自己的 `project.toml` 运行 `[check]`。所有检查都通过，这一回合才算通过。兄弟仓库的报告以 `[repo: C]` 开头。整个回合共用一次修复机会：只要有检查失败，模型就一次收到所有失败的报告。兄弟仓库的检查使用宿主 hook 预算里剩下的时间，因时间不够而跳过时，报告会说明。
+
+待批条数、用量记录、chronicle 事件、目标和高危命令检查仍然只属于 B。回合中途加进 `repos.txt` 的仓库，从下一回合起生效。shell 仍然不在覆盖范围内：往 C 里写文件的命令不会被拦。
 
 ## 配置
 
@@ -467,6 +488,7 @@ OpenCode 按第一个斜杠切分模型名称，所以斜杠之后的模型 id �
 - 各宿主的角色运行器依赖该宿主的输出或接口格式，宿主更新可能改变它。
 - 插件不记录子代理的命令和文件写入，所以 `over_review` 看不到它们。
 - 回合开始时的快照失败时，插件改为和 `HEAD` 比较。这时回合之前就没提交的文件也会算作改动。
+- `.cw/repos.txt` 列出的仓库只有在 B 有 `.cw/project.toml` 时，才按它们自己的 `[protect]` 判断写入；B 没有 `project.toml` 时，适配器在路径检查之前就返回，兄弟仓库只有 `goal.md`、`scope.txt`、`repos.txt` 的最小保护。
 
 Codex CLI：
 
@@ -511,6 +533,7 @@ Kimi Code：
 
 Hermes Agent：
 
+- hook 进程无法运行或出错退出时，`pre_tool_call` 会拒绝这次工具调用，保护失败即拒绝。其他 hook 不影响回合继续。
 - Hermes Agent 也没有给插件在回合结束时显示文字的通道。插件把报告追加到下一个回合的上下文里。`on_session_end` 每个回合之后都会触发，所以它能存下待批条数，但不能显示任何东西。
 - 检查只在 `pre_verify` 里运行，Hermes 在回合改过代码时才触发它。只回答问题的回合没有检查，它的 chronicle 事件 `outcome` 为 `unknown`。
 - Hermes 用 `plugins.hook_callback_timeout`（默认 30 秒，最大 600）限制插件的 `pre_verify` 回调，超时后让回合结束。在默认值下做的测试里，一个睡眠 35 秒的回调返回了续跑指令，Hermes 没有采用。所以插件把检查和角色缩小到配置的值之内，报告里写明实际用的值。不调高这项设置时，超过 15 秒的检查总会超时。
@@ -536,7 +559,7 @@ Hermes Agent：
 | OpenCode 上回合结束时什么也没出现 | OpenCode 在检查通过时什么也不显示 | 在 `.cw/meter.jsonl` 里找 `check` 事件。找不到时，确认 `.cw/project.toml` 有 `[check]` 小节，并确认插件已安装。 |
 | 报告显示 `配置非法` | `.cw/` 下的文件有未知字段或非法值 | 按消息里的字段名修改。 |
 | 模型改不了受保护路径下的文件 | 路径命中了 `protect.paths` | 自己修改该文件，或调整 `protect.paths`。 |
-| 模型改不了 `.cw/` 下的文件 | `project.toml`、`goal.md`、`scope.txt` 和五个宿主文件总是受保护 | 自己修改。 |
+| 模型改不了 `.cw/` 下的文件 | `project.toml`、`goal.md`、`scope.txt`、`repos.txt` 和五个宿主文件总是受保护 | 自己修改。 |
 | 角色工具报告 `未配置 [models].<role>` | 该角色没有配置模型 | 在你的宿主文件的 `[models]` 里添加。 |
 | Codex 上角色读不了文件 | 这台机器上 Codex 沙箱无法启动 | 检查 `kernel.apparmor_restrict_unprivileged_userns`，或设置 `roles.sandbox = "none"`。 |
 | 角色报告 `未正常结束` | 角色的回合没有完成 | 查看消息里的原因，然后重新调用工具。 |
