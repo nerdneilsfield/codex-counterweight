@@ -79,6 +79,6 @@ pi 没有 `flow.ts`，保护、范围、基线、结束检查在 `src/adapters/p
 ## 进度
 
 - [x] 1 本仓库：`repos.ts`、保护/范围/PAUSE、基线/diff、结束检查、测试、`check:sync`
-- [ ] 2 pi：同步实现和测试
+- [x] 2 pi：同步实现和测试
 - [ ] 3 文档：两个 README（中英）、`/cw-setup` 提示
 - [ ] 4 真实宿主复验
