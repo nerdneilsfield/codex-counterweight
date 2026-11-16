@@ -25,9 +25,13 @@ def _forward(hook, kw):
     env = dict(os.environ, CW_ROLE="1") if sid in ROLES else os.environ
     try:
         payload = json.dumps(dict(kw, hook=hook, cwd=cwd, budget_s=budget), default=str)
-        out = subprocess.run(["node", NODE], input=payload, capture_output=True, text=True, env=env, timeout=budget).stdout
-        return json.loads(out) if out.strip() else None
-    except Exception:
+        run = subprocess.run(["node", NODE], input=payload, capture_output=True, text=True, env=env, timeout=budget)
+        if run.returncode != 0:
+            raise RuntimeError(f"hook exited {run.returncode}: {run.stderr.strip()[:200]}")
+        return json.loads(run.stdout) if run.stdout.strip() else None
+    except Exception as error:
+        if hook == "pre_tool_call":
+            return {"action": "block", "message": f"[counterweight] protection check failed, call refused: {error}"}
         return None
 
 
