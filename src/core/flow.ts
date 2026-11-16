@@ -2,15 +2,17 @@
  * 三个宿主共用的流程：路径保护、结束检查加自动任务、PAUSE。
  * 只抽流程，不抽事件模型：各宿主自己解析输入、翻译输出。
  */
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { changedFiles, chronicleReport, renderActions, workingDiff, type ActionRecord } from "./auto.js";
+import { baseTrees, changedFiles, chronicleReport, renderActions, snapshotRepo, workingDiff, type ActionRecord } from "./auto.js";
 import type { ChronicleInput } from "./chronicle-event.js";
 import { checkPassed, renderCheckReport, runEndCheck } from "./check.js";
-import type { ProjectConfig } from "./config.js";
+import { parseProjectConfig, type ProjectConfig } from "./config.js";
 import { recordEvent } from "./meter.js";
 import { isNotFound, realpathOr, resolveWriteTarget } from "./paths.js";
 import { isSourceEdit, pauseReason, plannerMessage } from "./pause.js";
 import { GOAL_FILE, isProtected } from "./protect.js";
+import { ownerOf, readRepos, REPOS_FILE } from "./repos.js";
 import { inScope, readScope, SCOPE_FILE, scopeReason } from "./scope.js";
 import type { Claim } from "./turnstate.js";
 import type { RoleRunner } from "../roles/run.js";
@@ -22,7 +24,7 @@ const MAX_CHECK_TIMEOUT_S = 3570;
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
 
 const PROTECTED_REASON = (relative: string) => `[counterweight] ${relative} 是受保护路径`
-  + "（.cw/project.toml、.cw/goal.md、.cw/scope.txt、.cw/ 下的宿主配置文件或项目配置 [protect].paths）；如需修改请由用户手动完成。";
+  + "（.cw/project.toml、.cw/goal.md、.cw/scope.txt、.cw/repos.txt、.cw/ 下的宿主配置文件或项目配置 [protect].paths）；如需修改请由用户手动完成。";
 
 const UNVERIFIABLE_REASON = (value: string) =>
   `[counterweight] 路径无法核对受保护集合（符号链接逃逸仓库或不可解析），已拒绝：${value}`;
@@ -35,7 +37,17 @@ export async function checkPaths(
     if (paths.length === 0) return "[counterweight] 无法从补丁中解析出路径，无法核对受保护集合，已拒绝。";
     const realCwd = await realpathOr(cwd);
     const reasons: string[] = [];
+    const extras = await readRepos(root);
     for (const raw of paths) {
+      const routed = await routedTarget(root, realCwd, extras, raw);
+      if (routed !== null) {
+        const isExtra = extras.includes(routed.repo);
+        const patterns = isExtra ? ((await loadExtraProject(routed.repo))?.protect.paths ?? []) : project.protect.paths;
+        if (isProtected(routed.relative, patterns)) {
+          reasons.push(PROTECTED_REASON(isExtra ? repoLabel(routed.repo, routed.relative) : routed.relative));
+        }
+        continue;
+      }
       const reason = await checkProtectedTarget(root, realCwd, project.protect.paths, raw);
       if (reason !== null) reasons.push(reason);
     }
@@ -74,23 +86,61 @@ function toRepoRelative(repoRoot: string, cwd: string, value: string): string | 
 }
 
 /**
- * 没有可用配置时的最小保护：`.cw/goal.md` 不用配置也会被注入，`.cw/scope.txt` 不用配置也会生效，所以仍然拒绝写它们，
+ * 有额外仓库（`.cw/repos.txt`）时，路径该按哪个仓库判断：返回 null 表示按主仓库的老逻辑；
+ * 否则是额外仓库（或经符号链接落到仓库外路径的真实归属）的根和相对路径。
+ */
+async function routedTarget(
+  root: string, cwd: string, extras: readonly string[], raw: string,
+): Promise<{ repo: string; relative: string } | null> {
+  if (extras.length === 0) return null;
+  const owner = await ownerOf(root, extras, path.resolve(cwd, raw));
+  if (owner === null) return null;
+  if (!extras.includes(owner.repo) && toRepoRelative(root, cwd, raw) !== null) return null;
+  return owner;
+}
+
+/** 额外仓库自己的配置；没有 project.toml 为 null，配置非法时抛错（调用方按拒绝处理）。宿主文件不读，只要检查和保护。 */
+async function loadExtraProject(repo: string): Promise<ProjectConfig | null> {
+  let text: string;
+  try {
+    text = await readFile(path.join(repo, ".cw/project.toml"), "utf8");
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+  return parseProjectConfig(text);
+}
+
+const repoLabel = (repo: string, relative: string) => `${path.basename(repo)}/${relative}`;
+
+const MINIMAL = [GOAL_FILE, SCOPE_FILE, REPOS_FILE];
+
+/**
+ * 没有可用配置时的最小保护：`.cw/goal.md` 不用配置也会被注入，`.cw/scope.txt` 不用配置也会生效，`.cw/repos.txt` 扩大写入范围，所以仍然拒绝写它们，
  * 包括经符号链接指向它们的路径。其他路径一律放行，`.cw/project.toml` 要留给 setup 创建。
  */
 export async function checkGoalPaths(root: string, cwd: string, paths: string[]): Promise<string | null> {
   try {
     const realCwd = await realpathOr(cwd);
+    const extras = await readRepos(root);
     for (const raw of paths) {
+      const routed = await routedTarget(root, realCwd, extras, raw);
+      if (routed !== null) {
+        if (MINIMAL.includes(routed.relative)) {
+          return PROTECTED_REASON(extras.includes(routed.repo) ? repoLabel(routed.repo, routed.relative) : routed.relative);
+        }
+        continue;
+      }
       const lexical = toRepoRelative(root, realCwd, raw);
       if (lexical === null) continue;
-      if (lexical === GOAL_FILE || lexical === SCOPE_FILE) return PROTECTED_REASON(lexical);
+      if (MINIMAL.includes(lexical)) return PROTECTED_REASON(lexical);
       let resolved: string;
       try {
         resolved = await resolveWriteTarget(root, lexical);
       } catch {
         continue;
       }
-      if (resolved === GOAL_FILE || resolved === SCOPE_FILE) return `${PROTECTED_REASON(resolved)}（路径 ${raw} 指向该受保护文件）`;
+      if (MINIMAL.includes(resolved)) return `${PROTECTED_REASON(resolved)}（路径 ${raw} 指向该受保护文件）`;
     }
     return null;
   } catch {
@@ -105,10 +155,22 @@ export async function checkGoalPaths(root: string, cwd: string, paths: string[])
 export async function checkScopePaths(root: string, cwd: string, paths: string[]): Promise<string | null> {
   try {
     const prefixes = await readScope(root);
-    if (prefixes === null) return null;
-    if (paths.length === 0) return `[counterweight] 无法解析出写入路径，无法核对 ${SCOPE_FILE} 的范围，已拒绝。`;
+    const extras = await readRepos(root);
+    if (prefixes === null && extras.length === 0) return null;
+    if (prefixes !== null && paths.length === 0) return `[counterweight] 无法解析出写入路径，无法核对 ${SCOPE_FILE} 的范围，已拒绝。`;
     const realCwd = await realpathOr(cwd);
     for (const raw of paths) {
+      const routed = await routedTarget(root, realCwd, extras, raw);
+      if (routed !== null) {
+        // 额外仓库按自己的 scope.txt；主仓库的 scope.txt 只管主仓库内的路径。
+        const isExtra = extras.includes(routed.repo);
+        const own = isExtra ? await readScope(routed.repo) : prefixes;
+        if (own !== null && !inScope(routed.relative, own)) {
+          return scopeReason(isExtra ? repoLabel(routed.repo, routed.relative) : routed.relative);
+        }
+        continue;
+      }
+      if (prefixes === null) continue;
       const lexical = toRepoRelative(root, realCwd, raw);
       if (lexical === null) return scopeReason(raw);
       if (!inScope(lexical, prefixes)) return scopeReason(lexical);
@@ -153,6 +215,37 @@ export interface EndCheckLimits {
 export const NO_CHECK: EndCheckResult["settled"] = { outcome: "unknown", evidence: { gap: "没有配置结束检查" } };
 
 /**
+ * 额外仓库里要跑结束检查的：相对回合基线有改动、且自己的 `project.toml` 有 `[check]`。取不到多仓库基线时一个也没有。
+ * 配置读不了的仓库记一条说明（gap），不静默跳过。
+ */
+async function extraChecks(
+  root: string, base: () => Promise<string | null>,
+): Promise<{ jobs: Array<{ repo: string; check: NonNullable<ProjectConfig["check"]>; extra: true }>; gaps: string[] }> {
+  const jobs: Array<{ repo: string; check: NonNullable<ProjectConfig["check"]>; extra: true }> = [];
+  const gaps: string[] = [];
+  try {
+    const extras = await readRepos(root);
+    if (extras.length === 0) return { jobs, gaps };
+    const trees = baseTrees(await base());
+    if (trees === null) return { jobs, gaps };
+    for (const repo of extras) {
+      if (trees[repo] === undefined) continue;
+      const now = await snapshotRepo(repo);
+      if (now === null || now === trees[repo]) continue;
+      try {
+        const check = (await loadExtraProject(repo))?.check ?? null;
+        if (check !== null) jobs.push({ repo, check, extra: true });
+      } catch (error) {
+        gaps.push(`[counterweight] ${path.basename(repo)} 的 .cw/project.toml 无法读取，没有运行它的结束检查：${message(error)}`);
+      }
+    }
+  } catch {
+    // Best-effort: the main repo's check is unaffected.
+  }
+  return { jobs, gaps };
+}
+
+/**
  * 结束检查和自动任务。检查失败时第一次让模型修，额度用完后如实报告；审查发现同理，额度独立。
  * 计量失败不改变检查结论；`[auto]` 的任何失败都只是不产生文字。
  * `claim` 取本回合的一次额度，`prompt` 取本回合用户原话，存储由宿主决定。
@@ -177,38 +270,71 @@ export async function endCheck(params: {
   let checkReport: string | null = null;
   let attention = false;
   let settled = NO_CHECK;
-  if (project.check !== null) {
+  const extra = await extraChecks(root, params.base);
+  const jobs = [
+    ...(project.check !== null ? [{ repo: root, check: project.check, extra: false }] : []),
+    ...extra.jobs,
+  ];
+  if (jobs.length > 0 || extra.gaps.length > 0) {
     try {
-      const check = project.check;
-      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S, params.limits?.checkTimeoutS ?? MAX_CHECK_TIMEOUT_S);
-      const started = Date.now();
-      const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout }, signal });
-      // 被取消的检查没有结论：不算失败，不用修复额度，也不跑自动任务。
-      if (outcome.cancelled) {
+      // 有额外仓库参与时，报告每段前标仓库名。
+      const multi = extra.jobs.length > 0 || extra.gaps.length > 0;
+      const gaps = [...extra.gaps];
+      const budgetS = params.limits?.checkTimeoutS ?? MAX_CHECK_TIMEOUT_S;
+      const begun = Date.now();
+      const runs: Array<{ job: (typeof jobs)[number]; outcome: Awaited<ReturnType<typeof runEndCheck>>; timeout: number; ms: number }> = [];
+      for (const job of jobs) {
+        let timeout = Math.min(job.check.timeout_s, MAX_CHECK_TIMEOUT_S, budgetS);
+        if (job.extra) {
+          // 额外仓库的检查共用宿主 hook 的总预算：预算用完就不跑，并说明。
+          const remaining = Math.floor(budgetS - (Date.now() - begun) / 1000);
+          if (remaining < 1) {
+            gaps.push(`[counterweight] ${path.basename(job.repo)} 的结束检查没有运行：已超出宿主 hook 的时间预算。`);
+            continue;
+          }
+          timeout = Math.min(timeout, remaining);
+        }
+        const started = Date.now();
+        const outcome = await runEndCheck({ repo: job.repo, check: { ...job.check, timeout_s: timeout }, signal });
+        // 被取消的检查没有结论：不算失败，不用修复额度，也不跑自动任务。
+        if (outcome.cancelled) {
+          await recordEvent(root, session, "check", {
+            exit_code: outcome.exitCode, timed_out: false, spawn_error: outcome.runnerError,
+            ms: Date.now() - started, outcome: "cancelled", ...(job.extra ? { repo: path.basename(job.repo) } : {}),
+          }).catch(() => {});
+          return { continueWith: null, report: null, attention: false, settled: { outcome: "cancelled", evidence: { gap: "结束检查被取消" } } };
+        }
+        runs.push({ job, outcome, timeout, ms: Date.now() - started });
+      }
+      const failedAny = runs.some((run) => !checkPassed(run.outcome));
+      // 修复额度全回合共用一次：任何一个失败且领到额度，就把所有失败报告合并续跑。
+      const retry = failedAny && await params.claim("repair");
+      const reports: Array<{ passed: boolean; text: string }> = [];
+      for (const { job, outcome, timeout, ms } of runs) {
+        const passed = checkPassed(outcome);
+        let report = renderCheckReport(outcome, { command: job.check.cmd.join(" "), final: !passed && !retry });
+        if (timeout < job.check.timeout_s) {
+          report += `\n[counterweight] check.timeout_s=${job.check.timeout_s} 超过上限，实际超时 ${timeout}s`;
+        }
+        // A meter failure must not discard the check's conclusion.
         await recordEvent(root, session, "check", {
-          exit_code: outcome.exitCode, timed_out: false, spawn_error: outcome.runnerError,
-          ms: Date.now() - started, outcome: "cancelled",
+          exit_code: outcome.exitCode,
+          timed_out: outcome.timedOut,
+          spawn_error: outcome.runnerError,
+          ms,
+          outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported",
+          ...(job.extra ? { repo: path.basename(job.repo) } : {}),
         }).catch(() => {});
-        return { continueWith: null, report: null, attention: false, settled: { outcome: "cancelled", evidence: { gap: "结束检查被取消" } } };
+        reports.push({ passed, text: multi ? `[repo: ${path.basename(job.repo)}]\n${report}` : report });
       }
-      const passed = checkPassed(outcome);
-      const retry = !passed && await params.claim("repair");
-      let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final: !passed && !retry });
-      if (timeout < check.timeout_s) {
-        report += `\n[counterweight] check.timeout_s=${check.timeout_s} 超过上限，实际超时 ${timeout}s`;
+      if (retry) {
+        return { continueWith: reports.filter((item) => !item.passed).map((item) => item.text).join("\n\n"), report: null, attention: false, settled: NO_CHECK };
       }
-      // A meter failure must not discard the check's conclusion.
-      await recordEvent(root, session, "check", {
-        exit_code: outcome.exitCode,
-        timed_out: outcome.timedOut,
-        spawn_error: outcome.runnerError,
-        ms: Date.now() - started,
-        outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported",
-      }).catch(() => {});
-      if (retry) return { continueWith: report, report: null, attention: false, settled: NO_CHECK };
-      checkReport = report;
-      attention = !passed;
-      settled = { outcome: passed ? "ok" : "failed", evidence: { text: report } };
+      checkReport = [...reports.map((item) => item.text), ...gaps].join("\n\n");
+      attention = failedAny || gaps.length > 0;
+      settled = failedAny ? { outcome: "failed", evidence: { text: checkReport } }
+        : gaps.length > 0 ? { outcome: "unknown", evidence: { gap: checkReport } }
+        : { outcome: "ok", evidence: { text: checkReport } };
     } catch (error) {
       checkReport = `[counterweight] 结束检查未能完成，本轮没有得到检查结论：${message(error)}`;
       attention = true;
@@ -323,7 +449,17 @@ export async function pausePlan(params: {
     const { root, project, session } = params;
     const planner = project.models.planner;
     if (!project.auto.pause || planner === null) return null;
-    const targets = params.paths.map((raw) => toRepoRelative(root, params.cwd, raw)).filter((relative) => isSourceEdit(relative));
+    const extras = await readRepos(root);
+    const targets: string[] = [];
+    for (const raw of params.paths) {
+      const routed = await routedTarget(root, params.cwd, extras, raw);
+      if (routed !== null) {
+        if (isSourceEdit(routed.relative)) targets.push(extras.includes(routed.repo) ? repoLabel(routed.repo, routed.relative) : routed.relative);
+        continue;
+      }
+      const relative = toRepoRelative(root, params.cwd, raw);
+      if (relative !== null && isSourceEdit(relative)) targets.push(relative);
+    }
     if (targets.length === 0) return null;
     if (!await params.claim()) return null;
     const started = Date.now();

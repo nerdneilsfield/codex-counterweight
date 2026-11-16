@@ -7,7 +7,7 @@ var __export = (target, all) => {
 // src/core/auto.ts
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import path from "node:path";
+import path2 from "node:path";
 
 // src/core/gitstate.ts
 import { spawn } from "node:child_process";
@@ -40,6 +40,67 @@ function git(repo, args, env = {}) {
   });
 }
 
+// src/core/repos.ts
+import { readFile, realpath, stat } from "node:fs/promises";
+import path from "node:path";
+var REPOS_FILE = ".cw/repos.txt";
+var inside = (root, candidate) => {
+  const relative = path.relative(root, candidate);
+  return relative === "" || !relative.startsWith("..") && !path.isAbsolute(relative);
+};
+async function readRepos(root) {
+  let text2;
+  let main;
+  try {
+    text2 = await readFile(path.join(root, REPOS_FILE), "utf8");
+    main = await realpath(root);
+  } catch {
+    return [];
+  }
+  const repos = [];
+  for (const line of text2.split("\n").map((item) => item.trim())) {
+    if (line === "" || line.startsWith("#")) continue;
+    try {
+      const real = await realpath(path.resolve(root, line));
+      if (!(await stat(real)).isDirectory()) continue;
+      await stat(path.join(real, ".git"));
+      if (inside(main, real) || repos.includes(real)) continue;
+      repos.push(real);
+    } catch {
+    }
+  }
+  return repos;
+}
+async function realTarget(absolute) {
+  const rest = [];
+  let current = path.resolve(absolute);
+  for (; ; ) {
+    try {
+      return path.join(await realpath(current), ...rest);
+    } catch (error) {
+      const parent = path.dirname(current);
+      if (parent === current || !(error instanceof Error && "code" in error && (error.code === "ENOENT" || error.code === "ENOTDIR"))) throw error;
+      rest.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+async function ownerOf(root, extras, absolute) {
+  let target;
+  let main;
+  try {
+    target = await realTarget(absolute);
+    main = await realpath(root);
+  } catch {
+    return null;
+  }
+  for (const repo of [main, ...extras]) {
+    if (!inside(repo, target)) continue;
+    return { repo, relative: path.relative(repo, target).split(path.sep).join("/") };
+  }
+  return null;
+}
+
 // src/core/auto.ts
 var DIFF_CAP = 8e4;
 var ACTION_CAP = 40;
@@ -68,10 +129,32 @@ ${shown.join("\n")}${rest}
 `;
 }
 async function snapshotTree(repo) {
+  const extras = await readRepos(repo);
+  if (extras.length === 0) return snapshotRepo(repo);
+  const trees = {};
+  for (const item of [repo, ...extras]) {
+    const tree = await snapshotRepo(item);
+    if (tree !== null) trees[item] = tree;
+  }
+  return Object.keys(trees).length === 0 ? null : JSON.stringify(trees);
+}
+function baseTrees(base) {
+  if (base === null || !base.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(base);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const trees = {};
+    for (const [key, value] of Object.entries(parsed)) if (typeof value === "string") trees[key] = value;
+    return trees;
+  } catch {
+    return null;
+  }
+}
+async function snapshotRepo(repo) {
   let dir = null;
   try {
-    dir = await mkdtemp(path.join(tmpdir(), "cw-index-"));
-    const env = { GIT_INDEX_FILE: path.join(dir, "index") };
+    dir = await mkdtemp(path2.join(tmpdir(), "cw-index-"));
+    const env = { GIT_INDEX_FILE: path2.join(dir, "index") };
     await git(repo, ["read-tree", "HEAD"], env);
     if ((await git(repo, ["add", "-A"], env)).code !== 0) return null;
     const tree = await git(repo, ["write-tree"], env);
@@ -92,9 +175,30 @@ async function gitOut(repo, args) {
     return null;
   }
 }
+async function repoDiff(repo, base, prefix = "") {
+  const end = await snapshotRepo(repo);
+  const names = prefix === "" ? [] : [`--src-prefix=a/${prefix}/`, `--dst-prefix=b/${prefix}/`];
+  return gitOut(repo, ["diff", "--no-ext-diff", "--no-color", ...names, ...diffRange(base, end), "--", ".", ":!.cw"]);
+}
+var prefixOf = (main, repo) => path2.resolve(repo) === path2.resolve(main) ? "" : path2.basename(repo);
 async function workingDiff(repo, base) {
-  const end = await snapshotTree(repo);
-  const body = await gitOut(repo, ["diff", "--no-ext-diff", "--no-color", ...diffRange(base, end), "--", ".", ":!.cw"]);
+  const trees = baseTrees(base);
+  let body;
+  if (trees === null) {
+    body = await repoDiff(repo, base);
+  } else {
+    const parts = [];
+    let any = false;
+    for (const [item, tree] of Object.entries(trees)) {
+      const prefix = prefixOf(repo, item);
+      const one = await repoDiff(item, tree, prefix);
+      if (one === null) continue;
+      any = true;
+      if (one.trim() !== "") parts.push(prefix === "" ? one : `# repo: ${prefix}
+${one}`);
+    }
+    body = any ? parts.join("") : null;
+  }
   if (body === null) return null;
   if (body.trim() === "") return "";
   return body.length > DIFF_CAP ? `${body.slice(0, DIFF_CAP)}
@@ -116,16 +220,23 @@ ${checkLine === null ? "" : `
 \u65F6\u95F4\uFF1A${(/* @__PURE__ */ new Date()).toISOString()}\u3002\u63D0\u4EA4\u4FE1\u606F\u4E0E\u65E5\u671F\u8BF7\u4EE5\u4ED3\u5E93\u4E3A\u51C6\uFF0C\u4E0D\u8981\u7F16\u9020\u3002`;
 }
 async function changedFiles(repo, base) {
-  const end = await snapshotTree(repo);
-  const out = await gitOut(repo, ["-c", "core.quotePath=false", "diff", "--name-only", "-z", ...diffRange(base, end), "--", ".", ":!.cw"]);
-  return out === null ? [] : out.split("\0").filter((name) => name !== "");
+  const trees = baseTrees(base);
+  const one = async (item, tree, prefix) => {
+    const end = await snapshotRepo(item);
+    const out = await gitOut(item, ["-c", "core.quotePath=false", "diff", "--name-only", "-z", ...diffRange(tree, end), "--", ".", ":!.cw"]);
+    return out === null ? [] : out.split("\0").filter((name) => name !== "").map((name) => prefix === "" ? name : `${prefix}/${name}`);
+  };
+  if (trees === null) return one(repo, base, "");
+  const files = [];
+  for (const [item, tree] of Object.entries(trees)) files.push(...await one(item, tree, prefixOf(repo, item)));
+  return files;
 }
 
 // src/core/chronicle-event.ts
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile as readFile2, rename, stat as stat2, writeFile } from "node:fs/promises";
 import os from "node:os";
-import path2 from "node:path";
+import path3 from "node:path";
 var EVIDENCE_CAP = 2e3;
 function parseProjects(text2) {
   const projects = /* @__PURE__ */ new Map();
@@ -134,21 +245,21 @@ function parseProjects(text2) {
     if (match === null) continue;
     const key = match[1] ?? match[2] ?? match[3];
     const id = match[4] ?? match[5] ?? match[6];
-    if (!path2.isAbsolute(key)) continue;
-    projects.set(path2.resolve(key), id === "" || id === "null" || id === "~" ? null : id);
+    if (!path3.isAbsolute(key)) continue;
+    projects.set(path3.resolve(key), id === "" || id === "null" || id === "~" ? null : id);
   }
   return projects;
 }
 async function projectOf(dir, workspace) {
   try {
-    return parseProjects(await readFile(path2.join(dir, "projects.yaml"), "utf8")).get(path2.resolve(workspace)) ?? null;
+    return parseProjects(await readFile2(path3.join(dir, "projects.yaml"), "utf8")).get(path3.resolve(workspace)) ?? null;
   } catch {
     return null;
   }
 }
 async function writeJson(dir, id, value) {
   await mkdir(dir, { recursive: true });
-  const target = path2.join(dir, `${id}.json`);
+  const target = path3.join(dir, `${id}.json`);
   const temp = `${target}.tmp`;
   await writeFile(temp, `${JSON.stringify(value, null, 2)}
 `, { flag: "wx" });
@@ -156,22 +267,22 @@ async function writeJson(dir, id, value) {
 }
 async function writeChronicleEvent(input) {
   try {
-    const root = path2.join(os.homedir(), ".agents", "chronicle");
-    if (!(await stat(root)).isDirectory()) return;
+    const root = path3.join(os.homedir(), ".agents", "chronicle");
+    if (!(await stat2(root)).isDirectory()) return;
     const hostname = os.hostname();
     const machine = hostname.replace(/[^A-Za-z0-9._-]/g, "_") || "unknown";
     const time = (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
     const eventId = randomUUID();
     const evidence = "text" in input.evidence ? { text: input.evidence.text.slice(0, EVIDENCE_CAP) } : { gap: input.evidence.gap };
     const evidenceId = randomUUID();
-    await writeJson(path2.join(root, "evidence", machine), evidenceId, {
+    await writeJson(path3.join(root, "evidence", machine), evidenceId, {
       id: evidenceId,
       event: eventId,
       time,
       source: `counterweight:${input.host}`,
       ...evidence
     });
-    await writeJson(path2.join(root, "events", machine), eventId, {
+    await writeJson(path3.join(root, "events", machine), eventId, {
       id: eventId,
       time,
       machine: hostname,
@@ -357,8 +468,8 @@ async function dangerousCommandIn(repo, command) {
 }
 
 // src/core/config.ts
-import { readFile as readFile2 } from "node:fs/promises";
-import path4 from "node:path";
+import { readFile as readFile3 } from "node:fs/promises";
+import path5 from "node:path";
 
 // node_modules/smol-toml/dist/error.js
 function getLineColFromPtr(string2, ptr) {
@@ -1119,10 +1230,10 @@ function parse(toml, options = {}) {
 var HAS_WELLFORMED = !!"".isWellFormed;
 
 // src/core/paths.ts
-import { lstat, realpath } from "node:fs/promises";
-import path3 from "node:path";
+import { lstat, realpath as realpath2 } from "node:fs/promises";
+import path4 from "node:path";
 function relativeParts(value) {
-  if (value === "" || path3.isAbsolute(value) || path3.win32.isAbsolute(value)) {
+  if (value === "" || path4.isAbsolute(value) || path4.win32.isAbsolute(value)) {
     throw new Error(`path: must be repo-relative ${value}`);
   }
   const parts = value.split("/");
@@ -1132,12 +1243,12 @@ function relativeParts(value) {
   return parts;
 }
 function pathInside(root, candidate) {
-  const relative = path3.relative(root, candidate);
-  return relative === "" || !relative.startsWith("..") && !path3.isAbsolute(relative);
+  const relative = path4.relative(root, candidate);
+  return relative === "" || !relative.startsWith("..") && !path4.isAbsolute(relative);
 }
 async function resolveWriteTarget(root, relative) {
   const parts = relativeParts(relative);
-  const absolute = path3.join(root, ...parts);
+  const absolute = path4.join(root, ...parts);
   let leaf;
   try {
     leaf = await lstat(absolute);
@@ -1157,15 +1268,15 @@ async function resolveWriteTarget(root, relative) {
     return await containedRelative(root, absolute, relative);
   }
   for (let length = parts.length - 1; length >= 1; length -= 1) {
-    const ancestor = path3.join(root, ...parts.slice(0, length));
-    let stat2;
+    const ancestor = path4.join(root, ...parts.slice(0, length));
+    let stat3;
     try {
-      stat2 = await lstat(ancestor);
+      stat3 = await lstat(ancestor);
     } catch (error) {
       if (isNotFound(error)) continue;
       throw error;
     }
-    if (stat2.isSymbolicLink() || stat2.isDirectory()) {
+    if (stat3.isSymbolicLink() || stat3.isDirectory()) {
       const realAncestor = await containedRelative(root, ancestor, relative);
       const rest = parts.slice(length);
       return realAncestor === "" ? rest.join("/") : [realAncestor, ...rest].join("/");
@@ -1175,14 +1286,14 @@ async function resolveWriteTarget(root, relative) {
   return relative;
 }
 async function containedRelative(root, candidate, label) {
-  const target = await realpath(candidate);
+  const target = await realpath2(candidate);
   if (!pathInside(root, target)) throw new Error(`path: symlink escapes repository ${label}`);
-  const relative = path3.relative(root, target);
-  return relative === "" ? "" : relative.split(path3.sep).join("/");
+  const relative = path4.relative(root, target);
+  return relative === "" ? "" : relative.split(path4.sep).join("/");
 }
 async function realpathOr(value) {
   try {
-    return await realpath(value);
+    return await realpath2(value);
   } catch {
     return value;
   }
@@ -8237,23 +8348,23 @@ function Parse(...args) {
 }
 
 // node_modules/typebox/build/value/delta/diff.mjs
-function CreateUpdate(path13, value) {
-  return { type: "update", path: path13, value };
+function CreateUpdate(path14, value) {
+  return { type: "update", path: path14, value };
 }
-function CreateInsert(path13, value) {
-  return { type: "insert", path: path13, value };
+function CreateInsert(path14, value) {
+  return { type: "insert", path: path14, value };
 }
-function CreateDelete(path13) {
-  return { type: "delete", path: path13 };
+function CreateDelete(path14) {
+  return { type: "delete", path: path14 };
 }
 function AssertCanDiffObject(value) {
   if (guard_exports.IsObject(value) && guard_exports.IsEqual(guard_exports.Symbols(value).length, 0))
     return;
   throw new Error("Cannot create diffs for objects with symbols keys");
 }
-function* FromObject17(path13, left, right) {
+function* FromObject17(path14, left, right) {
   if (!guard_exports.IsObject(right) || guard_exports.IsArray(right))
-    return yield CreateUpdate(path13, right);
+    return yield CreateUpdate(path14, right);
   AssertCanDiffObject(left);
   AssertCanDiffObject(right);
   const leftKeys = guard_exports.Keys(left);
@@ -8263,7 +8374,7 @@ function* FromObject17(path13, left, right) {
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateInsert(`${path13}/${key}`, right[key]);
+    yield CreateInsert(`${path14}/${key}`, right[key]);
   }
   for (const key of leftKeys) {
     if (!guard_exports.HasPropertyKey(right, key))
@@ -8272,52 +8383,52 @@ function* FromObject17(path13, left, right) {
       continue;
     if (Equal(left, right))
       continue;
-    yield* FromValue4(`${path13}/${key}`, left[key], right[key]);
+    yield* FromValue4(`${path14}/${key}`, left[key], right[key]);
   }
   for (const key of leftKeys) {
     if (guard_exports.HasPropertyKey(right, key))
       continue;
     if (guard_exports.IsUnsafePropertyKey(key))
       continue;
-    yield CreateDelete(`${path13}/${key}`);
+    yield CreateDelete(`${path14}/${key}`);
   }
 }
-function* FromArray13(path13, left, right) {
+function* FromArray13(path14, left, right) {
   if (!guard_exports.IsArray(right))
-    return yield CreateUpdate(path13, right);
+    return yield CreateUpdate(path14, right);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
-    yield* FromValue4(`${path13}/${i}`, left[i], right[i]);
+    yield* FromValue4(`${path14}/${i}`, left[i], right[i]);
   }
   for (let i = 0; i < right.length; i++) {
     if (i < left.length)
       continue;
-    yield CreateInsert(`${path13}/${i}`, right[i]);
+    yield CreateInsert(`${path14}/${i}`, right[i]);
   }
   for (let i = left.length - 1; i >= 0; i--) {
     if (i < right.length)
       continue;
-    yield CreateDelete(`${path13}/${i}`);
+    yield CreateDelete(`${path14}/${i}`);
   }
 }
-function* FromTypedArray2(path13, left, right) {
+function* FromTypedArray2(path14, left, right) {
   const typeLeft = globalThis.Object.getPrototypeOf(left).constructor.name;
   const typeRight = globalThis.Object.getPrototypeOf(right).constructor.name;
   const predicate = globals_exports.IsTypeArray(right) && guard_exports.IsEqual(left.length, right.length) && guard_exports.IsEqual(typeLeft, typeRight);
   if (predicate) {
     for (let index = 0; index < Math.min(left.length, right.length); index++) {
-      yield* FromValue4(`${path13}/${index}`, left[index], right[index]);
+      yield* FromValue4(`${path14}/${index}`, left[index], right[index]);
     }
   } else {
-    return yield CreateUpdate(path13, right);
+    return yield CreateUpdate(path14, right);
   }
 }
-function* FromUnknown(path13, left, right) {
+function* FromUnknown(path14, left, right) {
   if (left === right)
     return;
-  yield CreateUpdate(path13, right);
+  yield CreateUpdate(path14, right);
 }
-function* FromValue4(path13, left, right) {
-  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path13, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path13, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path13, left, right) : yield* FromUnknown(path13, left, right);
+function* FromValue4(path14, left, right) {
+  return globals_exports.IsTypeArray(left) ? yield* FromTypedArray2(path14, left, right) : guard_exports.IsArray(left) ? yield* FromArray13(path14, left, right) : guard_exports.IsObject(left) ? yield* FromObject17(path14, left, right) : yield* FromUnknown(path14, left, right);
 }
 function Diff(current, next) {
   return [...FromValue4("", current, next)];
@@ -8762,7 +8873,7 @@ async function loadProjectConfig(repo, hostFile) {
 }
 async function readOptional(repo, name) {
   try {
-    return await readFile2(path4.join(repo, ".cw", name), "utf8");
+    return await readFile3(path5.join(repo, ".cw", name), "utf8");
   } catch (error) {
     if (isNotFound(error)) return null;
     throw new Error(`${name}: ${error instanceof Error ? error.message : "unreadable"}`);
@@ -8841,12 +8952,13 @@ function normalizeProtectedPath(value) {
 }
 
 // src/core/flow.ts
-import path11 from "node:path";
+import { readFile as readFile6 } from "node:fs/promises";
+import path12 from "node:path";
 
 // src/core/check.ts
 import { mkdtemp as mkdtemp2, open as open2, rm as rm2 } from "node:fs/promises";
 import { tmpdir as tmpdir2 } from "node:os";
-import path5 from "node:path";
+import path6 from "node:path";
 
 // src/core/process.ts
 import { spawn as spawn2 } from "node:child_process";
@@ -9026,9 +9138,9 @@ function delay(ms) {
 var TAIL_LINES = 80;
 var TAIL_BYTES = 16 * 1024;
 async function runEndCheck(request) {
-  const directory = await mkdtemp2(path5.join(tmpdir2(), "cw-check-"));
-  const stdoutPath = path5.join(directory, "stdout.log");
-  const stderrPath = path5.join(directory, "stderr.log");
+  const directory = await mkdtemp2(path6.join(tmpdir2(), "cw-check-"));
+  const stdoutPath = path6.join(directory, "stdout.log");
+  const stderrPath = path6.join(directory, "stderr.log");
   const started = Date.now();
   let run = null;
   try {
@@ -9114,16 +9226,16 @@ async function readTail(file) {
 // src/core/meter.ts
 import { constants } from "node:fs";
 import { lstat as lstat2, mkdir as mkdir2, open as open3 } from "node:fs/promises";
-import path6 from "node:path";
+import path7 from "node:path";
 var APPEND_FLAGS = constants.O_APPEND | constants.O_CREAT | constants.O_WRONLY | constants.O_NOFOLLOW;
 async function appendMeterLine(repo, record) {
-  const dir = path6.join(repo, ".cw");
+  const dir = path7.join(repo, ".cw");
   await mkdir2(dir, { recursive: true });
-  const stat2 = await lstat2(dir);
-  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
+  const stat3 = await lstat2(dir);
+  if (stat3.isSymbolicLink() || !stat3.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165\u8BA1\u91CF");
   }
-  const handle = await open3(path6.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
+  const handle = await open3(path7.join(dir, "meter.jsonl"), APPEND_FLAGS, 420);
   try {
     await handle.writeFile(`${JSON.stringify(record)}
 `);
@@ -9235,16 +9347,16 @@ ${plan}`;
 }
 
 // src/core/protect.ts
-import path8 from "node:path";
+import path9 from "node:path";
 
 // src/core/scope.ts
-import { readFile as readFile3 } from "node:fs/promises";
-import path7 from "node:path";
+import { readFile as readFile4 } from "node:fs/promises";
+import path8 from "node:path";
 var SCOPE_FILE = ".cw/scope.txt";
 async function readScope(repo) {
   let text2;
   try {
-    text2 = await readFile3(path7.join(repo, SCOPE_FILE), "utf8");
+    text2 = await readFile4(path8.join(repo, SCOPE_FILE), "utf8");
   } catch {
     return null;
   }
@@ -9252,7 +9364,7 @@ async function readScope(repo) {
   return prefixes.length === 0 ? null : prefixes;
 }
 function inScope(relative, prefixes) {
-  const normalized = relative.split(path7.sep).join("/");
+  const normalized = relative.split(path8.sep).join("/");
   if (normalized === ".cw" || normalized.startsWith(".cw/")) return true;
   return prefixes.some((prefix) => normalized === prefix || normalized.startsWith(`${prefix}/`));
 }
@@ -9262,26 +9374,26 @@ var scopeReason = (target) => `[counterweight] ${target} \u5728 ${SCOPE_FILE} \u
 var CONFIG_FILES = [".cw/project.toml", ".cw/codex.toml", ".cw/claude.toml", ".cw/opencode.toml", ".cw/kimi.toml", ".cw/hermes.toml"];
 var GOAL_FILE = ".cw/goal.md";
 function isProtected(relative, patterns) {
-  const normalized = relative.split(path8.sep).join("/");
-  if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE || normalized === SCOPE_FILE) return true;
+  const normalized = relative.split(path9.sep).join("/");
+  if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE || normalized === SCOPE_FILE || normalized === REPOS_FILE) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
 
 // src/roles/tools.ts
-import { readFile as readFile4 } from "node:fs/promises";
-import path10 from "node:path";
+import { readFile as readFile5 } from "node:fs/promises";
+import path11 from "node:path";
 
 // src/core/cwfile.ts
 import { lstat as lstat3, mkdir as mkdir3, rename as rename2, writeFile as writeFile2 } from "node:fs/promises";
-import path9 from "node:path";
+import path10 from "node:path";
 async function writeCwFile(repo, name, content) {
-  const dir = path9.join(repo, ".cw");
+  const dir = path10.join(repo, ".cw");
   await mkdir3(dir, { recursive: true });
-  const stat2 = await lstat3(dir);
-  if (stat2.isSymbolicLink() || !stat2.isDirectory()) {
+  const stat3 = await lstat3(dir);
+  if (stat3.isSymbolicLink() || !stat3.isDirectory()) {
     throw new Error(".cw \u4E0D\u662F\u76EE\u5F55\uFF08\u6216\u88AB\u6362\u6210\u7B26\u53F7\u94FE\u63A5\uFF09\uFF0C\u62D2\u7EDD\u5199\u5165");
   }
-  const target = path9.join(dir, name);
+  const target = path10.join(dir, name);
   const temp = `${target}.${process.pid}.tmp`;
   await writeFile2(temp, content);
   await rename2(temp, target);
@@ -9501,7 +9613,7 @@ ${run.answer}`
 }
 async function readHistory(repo) {
   try {
-    return await readFile4(path10.join(repo, ".cw", HISTORY_FILE), "utf8");
+    return await readFile5(path11.join(repo, ".cw", HISTORY_FILE), "utf8");
   } catch (error) {
     if (error.code === "ENOENT") return "";
     throw error;
@@ -9542,14 +9654,24 @@ ${body.slice(0, 200)}`;
 // src/core/flow.ts
 var MAX_CHECK_TIMEOUT_S = 3570;
 var message = (error) => error instanceof Error ? error.message : String(error);
-var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/goal.md\u3001.cw/scope.txt\u3001.cw/ \u4E0B\u7684\u5BBF\u4E3B\u914D\u7F6E\u6587\u4EF6\u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
+var PROTECTED_REASON = (relative) => `[counterweight] ${relative} \u662F\u53D7\u4FDD\u62A4\u8DEF\u5F84\uFF08.cw/project.toml\u3001.cw/goal.md\u3001.cw/scope.txt\u3001.cw/repos.txt\u3001.cw/ \u4E0B\u7684\u5BBF\u4E3B\u914D\u7F6E\u6587\u4EF6\u6216\u9879\u76EE\u914D\u7F6E [protect].paths\uFF09\uFF1B\u5982\u9700\u4FEE\u6539\u8BF7\u7531\u7528\u6237\u624B\u52A8\u5B8C\u6210\u3002`;
 var UNVERIFIABLE_REASON = (value) => `[counterweight] \u8DEF\u5F84\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF08\u7B26\u53F7\u94FE\u63A5\u9003\u9038\u4ED3\u5E93\u6216\u4E0D\u53EF\u89E3\u6790\uFF09\uFF0C\u5DF2\u62D2\u7EDD\uFF1A${value}`;
 async function checkPaths(root, cwd, project, paths) {
   try {
     if (paths.length === 0) return "[counterweight] \u65E0\u6CD5\u4ECE\u8865\u4E01\u4E2D\u89E3\u6790\u51FA\u8DEF\u5F84\uFF0C\u65E0\u6CD5\u6838\u5BF9\u53D7\u4FDD\u62A4\u96C6\u5408\uFF0C\u5DF2\u62D2\u7EDD\u3002";
     const realCwd = await realpathOr(cwd);
     const reasons = [];
+    const extras = await readRepos(root);
     for (const raw of paths) {
+      const routed = await routedTarget(root, realCwd, extras, raw);
+      if (routed !== null) {
+        const isExtra = extras.includes(routed.repo);
+        const patterns = isExtra ? (await loadExtraProject(routed.repo))?.protect.paths ?? [] : project.protect.paths;
+        if (isProtected(routed.relative, patterns)) {
+          reasons.push(PROTECTED_REASON(isExtra ? repoLabel(routed.repo, routed.relative) : routed.relative));
+        }
+        continue;
+      }
       const reason = await checkProtectedTarget(root, realCwd, project.protect.paths, raw);
       if (reason !== null) reasons.push(reason);
     }
@@ -9576,24 +9698,51 @@ async function checkProtectedTarget(root, cwd, patterns, raw) {
   return null;
 }
 function toRepoRelative(repoRoot, cwd, value) {
-  const relative = path11.relative(repoRoot, path11.resolve(cwd, value));
-  if (relative === "" || relative.startsWith("..") || path11.isAbsolute(relative)) return null;
-  return relative.split(path11.sep).join("/");
+  const relative = path12.relative(repoRoot, path12.resolve(cwd, value));
+  if (relative === "" || relative.startsWith("..") || path12.isAbsolute(relative)) return null;
+  return relative.split(path12.sep).join("/");
 }
+async function routedTarget(root, cwd, extras, raw) {
+  if (extras.length === 0) return null;
+  const owner = await ownerOf(root, extras, path12.resolve(cwd, raw));
+  if (owner === null) return null;
+  if (!extras.includes(owner.repo) && toRepoRelative(root, cwd, raw) !== null) return null;
+  return owner;
+}
+async function loadExtraProject(repo) {
+  let text2;
+  try {
+    text2 = await readFile6(path12.join(repo, ".cw/project.toml"), "utf8");
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+  return parseProjectConfig(text2);
+}
+var repoLabel = (repo, relative) => `${path12.basename(repo)}/${relative}`;
+var MINIMAL = [GOAL_FILE, SCOPE_FILE, REPOS_FILE];
 async function checkGoalPaths(root, cwd, paths) {
   try {
     const realCwd = await realpathOr(cwd);
+    const extras = await readRepos(root);
     for (const raw of paths) {
+      const routed = await routedTarget(root, realCwd, extras, raw);
+      if (routed !== null) {
+        if (MINIMAL.includes(routed.relative)) {
+          return PROTECTED_REASON(extras.includes(routed.repo) ? repoLabel(routed.repo, routed.relative) : routed.relative);
+        }
+        continue;
+      }
       const lexical = toRepoRelative(root, realCwd, raw);
       if (lexical === null) continue;
-      if (lexical === GOAL_FILE || lexical === SCOPE_FILE) return PROTECTED_REASON(lexical);
+      if (MINIMAL.includes(lexical)) return PROTECTED_REASON(lexical);
       let resolved;
       try {
         resolved = await resolveWriteTarget(root, lexical);
       } catch {
         continue;
       }
-      if (resolved === GOAL_FILE || resolved === SCOPE_FILE) return `${PROTECTED_REASON(resolved)}\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u8BE5\u53D7\u4FDD\u62A4\u6587\u4EF6\uFF09`;
+      if (MINIMAL.includes(resolved)) return `${PROTECTED_REASON(resolved)}\uFF08\u8DEF\u5F84 ${raw} \u6307\u5411\u8BE5\u53D7\u4FDD\u62A4\u6587\u4EF6\uFF09`;
     }
     return null;
   } catch {
@@ -9603,10 +9752,21 @@ async function checkGoalPaths(root, cwd, paths) {
 async function checkScopePaths(root, cwd, paths) {
   try {
     const prefixes = await readScope(root);
-    if (prefixes === null) return null;
-    if (paths.length === 0) return `[counterweight] \u65E0\u6CD5\u89E3\u6790\u51FA\u5199\u5165\u8DEF\u5F84\uFF0C\u65E0\u6CD5\u6838\u5BF9 ${SCOPE_FILE} \u7684\u8303\u56F4\uFF0C\u5DF2\u62D2\u7EDD\u3002`;
+    const extras = await readRepos(root);
+    if (prefixes === null && extras.length === 0) return null;
+    if (prefixes !== null && paths.length === 0) return `[counterweight] \u65E0\u6CD5\u89E3\u6790\u51FA\u5199\u5165\u8DEF\u5F84\uFF0C\u65E0\u6CD5\u6838\u5BF9 ${SCOPE_FILE} \u7684\u8303\u56F4\uFF0C\u5DF2\u62D2\u7EDD\u3002`;
     const realCwd = await realpathOr(cwd);
     for (const raw of paths) {
+      const routed = await routedTarget(root, realCwd, extras, raw);
+      if (routed !== null) {
+        const isExtra = extras.includes(routed.repo);
+        const own = isExtra ? await readScope(routed.repo) : prefixes;
+        if (own !== null && !inScope(routed.relative, own)) {
+          return scopeReason(isExtra ? repoLabel(routed.repo, routed.relative) : routed.relative);
+        }
+        continue;
+      }
+      if (prefixes === null) continue;
       const lexical = toRepoRelative(root, realCwd, raw);
       if (lexical === null) return scopeReason(raw);
       if (!inScope(lexical, prefixes)) return scopeReason(lexical);
@@ -9623,48 +9783,101 @@ async function checkScopePaths(root, cwd, paths) {
   }
 }
 var NO_CHECK = { outcome: "unknown", evidence: { gap: "\u6CA1\u6709\u914D\u7F6E\u7ED3\u675F\u68C0\u67E5" } };
+async function extraChecks(root, base) {
+  const jobs = [];
+  const gaps = [];
+  try {
+    const extras = await readRepos(root);
+    if (extras.length === 0) return { jobs, gaps };
+    const trees = baseTrees(await base());
+    if (trees === null) return { jobs, gaps };
+    for (const repo of extras) {
+      if (trees[repo] === void 0) continue;
+      const now = await snapshotRepo(repo);
+      if (now === null || now === trees[repo]) continue;
+      try {
+        const check = (await loadExtraProject(repo))?.check ?? null;
+        if (check !== null) jobs.push({ repo, check, extra: true });
+      } catch (error) {
+        gaps.push(`[counterweight] ${path12.basename(repo)} \u7684 .cw/project.toml \u65E0\u6CD5\u8BFB\u53D6\uFF0C\u6CA1\u6709\u8FD0\u884C\u5B83\u7684\u7ED3\u675F\u68C0\u67E5\uFF1A${message(error)}`);
+      }
+    }
+  } catch {
+  }
+  return { jobs, gaps };
+}
 async function endCheck(params) {
   const { root, project, session, signal } = params;
   const texts = [];
   let checkReport = null;
   let attention = false;
   let settled = NO_CHECK;
-  if (project.check !== null) {
+  const extra = await extraChecks(root, params.base);
+  const jobs = [
+    ...project.check !== null ? [{ repo: root, check: project.check, extra: false }] : [],
+    ...extra.jobs
+  ];
+  if (jobs.length > 0 || extra.gaps.length > 0) {
     try {
-      const check = project.check;
-      const timeout = Math.min(check.timeout_s, MAX_CHECK_TIMEOUT_S, params.limits?.checkTimeoutS ?? MAX_CHECK_TIMEOUT_S);
-      const started = Date.now();
-      const outcome = await runEndCheck({ repo: root, check: { ...check, timeout_s: timeout }, signal });
-      if (outcome.cancelled) {
+      const multi = extra.jobs.length > 0 || extra.gaps.length > 0;
+      const gaps = [...extra.gaps];
+      const budgetS = params.limits?.checkTimeoutS ?? MAX_CHECK_TIMEOUT_S;
+      const begun = Date.now();
+      const runs = [];
+      for (const job of jobs) {
+        let timeout = Math.min(job.check.timeout_s, MAX_CHECK_TIMEOUT_S, budgetS);
+        if (job.extra) {
+          const remaining = Math.floor(budgetS - (Date.now() - begun) / 1e3);
+          if (remaining < 1) {
+            gaps.push(`[counterweight] ${path12.basename(job.repo)} \u7684\u7ED3\u675F\u68C0\u67E5\u6CA1\u6709\u8FD0\u884C\uFF1A\u5DF2\u8D85\u51FA\u5BBF\u4E3B hook \u7684\u65F6\u95F4\u9884\u7B97\u3002`);
+            continue;
+          }
+          timeout = Math.min(timeout, remaining);
+        }
+        const started = Date.now();
+        const outcome = await runEndCheck({ repo: job.repo, check: { ...job.check, timeout_s: timeout }, signal });
+        if (outcome.cancelled) {
+          await recordEvent(root, session, "check", {
+            exit_code: outcome.exitCode,
+            timed_out: false,
+            spawn_error: outcome.runnerError,
+            ms: Date.now() - started,
+            outcome: "cancelled",
+            ...job.extra ? { repo: path12.basename(job.repo) } : {}
+          }).catch(() => {
+          });
+          return { continueWith: null, report: null, attention: false, settled: { outcome: "cancelled", evidence: { gap: "\u7ED3\u675F\u68C0\u67E5\u88AB\u53D6\u6D88" } } };
+        }
+        runs.push({ job, outcome, timeout, ms: Date.now() - started });
+      }
+      const failedAny = runs.some((run) => !checkPassed(run.outcome));
+      const retry = failedAny && await params.claim("repair");
+      const reports = [];
+      for (const { job, outcome, timeout, ms } of runs) {
+        const passed = checkPassed(outcome);
+        let report = renderCheckReport(outcome, { command: job.check.cmd.join(" "), final: !passed && !retry });
+        if (timeout < job.check.timeout_s) {
+          report += `
+[counterweight] check.timeout_s=${job.check.timeout_s} \u8D85\u8FC7\u4E0A\u9650\uFF0C\u5B9E\u9645\u8D85\u65F6 ${timeout}s`;
+        }
         await recordEvent(root, session, "check", {
           exit_code: outcome.exitCode,
-          timed_out: false,
+          timed_out: outcome.timedOut,
           spawn_error: outcome.runnerError,
-          ms: Date.now() - started,
-          outcome: "cancelled"
+          ms,
+          outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported",
+          ...job.extra ? { repo: path12.basename(job.repo) } : {}
         }).catch(() => {
         });
-        return { continueWith: null, report: null, attention: false, settled: { outcome: "cancelled", evidence: { gap: "\u7ED3\u675F\u68C0\u67E5\u88AB\u53D6\u6D88" } } };
+        reports.push({ passed, text: multi ? `[repo: ${path12.basename(job.repo)}]
+${report}` : report });
       }
-      const passed = checkPassed(outcome);
-      const retry = !passed && await params.claim("repair");
-      let report = renderCheckReport(outcome, { command: check.cmd.join(" "), final: !passed && !retry });
-      if (timeout < check.timeout_s) {
-        report += `
-[counterweight] check.timeout_s=${check.timeout_s} \u8D85\u8FC7\u4E0A\u9650\uFF0C\u5B9E\u9645\u8D85\u65F6 ${timeout}s`;
+      if (retry) {
+        return { continueWith: reports.filter((item) => !item.passed).map((item) => item.text).join("\n\n"), report: null, attention: false, settled: NO_CHECK };
       }
-      await recordEvent(root, session, "check", {
-        exit_code: outcome.exitCode,
-        timed_out: outcome.timedOut,
-        spawn_error: outcome.runnerError,
-        ms: Date.now() - started,
-        outcome: outcome.runnerError !== null ? "spawn_error" : passed ? "passed" : retry ? "feedback" : "reported"
-      }).catch(() => {
-      });
-      if (retry) return { continueWith: report, report: null, attention: false, settled: NO_CHECK };
-      checkReport = report;
-      attention = !passed;
-      settled = { outcome: passed ? "ok" : "failed", evidence: { text: report } };
+      checkReport = [...reports.map((item) => item.text), ...gaps].join("\n\n");
+      attention = failedAny || gaps.length > 0;
+      settled = failedAny ? { outcome: "failed", evidence: { text: checkReport } } : gaps.length > 0 ? { outcome: "unknown", evidence: { gap: checkReport } } : { outcome: "ok", evidence: { text: checkReport } };
     } catch (error) {
       checkReport = `[counterweight] \u7ED3\u675F\u68C0\u67E5\u672A\u80FD\u5B8C\u6210\uFF0C\u672C\u8F6E\u6CA1\u6709\u5F97\u5230\u68C0\u67E5\u7ED3\u8BBA\uFF1A${message(error)}`;
       attention = true;
@@ -9747,7 +9960,17 @@ async function pausePlan(params) {
     const { root, project, session } = params;
     const planner = project.models.planner;
     if (!project.auto.pause || planner === null) return null;
-    const targets = params.paths.map((raw) => toRepoRelative(root, params.cwd, raw)).filter((relative) => isSourceEdit(relative));
+    const extras = await readRepos(root);
+    const targets = [];
+    for (const raw of params.paths) {
+      const routed = await routedTarget(root, params.cwd, extras, raw);
+      if (routed !== null) {
+        if (isSourceEdit(routed.relative)) targets.push(extras.includes(routed.repo) ? repoLabel(routed.repo, routed.relative) : routed.relative);
+        continue;
+      }
+      const relative = toRepoRelative(root, params.cwd, raw);
+      if (relative !== null && isSourceEdit(relative)) targets.push(relative);
+    }
     if (targets.length === 0) return null;
     if (!await params.claim()) return null;
     const started = Date.now();
@@ -9777,8 +10000,8 @@ async function pausePlan(params) {
 }
 
 // src/core/goal.ts
-import { readFile as readFile5 } from "node:fs/promises";
-import path12 from "node:path";
+import { readFile as readFile7 } from "node:fs/promises";
+import path13 from "node:path";
 
 // src/roles/explorer.md
 var explorer_default = "You are a read-only code finder. You have read and grep. You do not edit, create, or delete anything.\n\nAnswer only the question you were given. Do not comment on the task, do not suggest a design, and do not narrate the search.\n\nEvery claim is one line, and the line ends with the source: a repo-relative path and a line number, like `src/core/check.ts:42`. If you cannot point at the line, omit the claim. If nothing answers the question, reply with exactly `\u672A\u627E\u5230`.\n\nWrite Chinese in complete sentences, long and short mixed. No headings, no search log.\n";
@@ -9859,7 +10082,7 @@ Stop when the current question is answered. Do not ask whether to continue.`;
 async function readGoal(repo) {
   if (repo === null) return null;
   try {
-    return await readFile5(path12.join(repo, GOAL_FILE), "utf8");
+    return await readFile7(path13.join(repo, GOAL_FILE), "utf8");
   } catch {
     return null;
   }
