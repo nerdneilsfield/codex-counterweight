@@ -128,6 +128,9 @@ function renderActions(actions) {
 ${shown.join("\n")}${rest}
 `;
 }
+async function wantsBase(repo, auto) {
+  return auto.review || auto.chronicle || (await readRepos(repo)).length > 0;
+}
 async function snapshotTree(repo) {
   const extras = await readRepos(repo);
   if (extras.length === 0) return snapshotRepo(repo);
@@ -10316,7 +10319,7 @@ async function setupPlugin(ctx) {
     turns.set(event.sessionID, turn);
     try {
       const project = await load();
-      if (project !== null && (project.auto.review || project.auto.chronicle)) turn.base = await snapshotTree(root);
+      if (project !== null && await wantsBase(root, project.auto)) turn.base = await snapshotTree(root);
     } catch {
     }
   });

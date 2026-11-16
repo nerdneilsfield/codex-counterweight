@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { changedFiles, snapshotTree, workingDiff } from "../src/core/auto.js";
+import { changedFiles, snapshotTree, wantsBase, workingDiff } from "../src/core/auto.js";
 import { parseProjectConfig } from "../src/core/config.js";
 import { checkGoalPaths, checkPaths, checkScopePaths, endCheck, pausePlan } from "../src/core/flow.js";
 import { ownerOf, readRepos } from "../src/core/repos.js";
@@ -190,6 +190,16 @@ describe("end-of-turn check across repos", () => {
     const result = await run(null, []);
     expect(result.report).toBeNull();
     await expect(readFile(marker())).rejects.toThrow();
+  });
+});
+
+describe("wantsBase", () => {
+  const off = { review: false, chronicle: false };
+  it("takes a baseline when a sibling repo is listed even with auto off, and not otherwise", async () => {
+    expect(await wantsBase(B, off)).toBe(false);
+    expect(await wantsBase(B, { review: true, chronicle: false })).toBe(true);
+    await listRepos("../C");
+    expect(await wantsBase(B, off)).toBe(true);
   });
 });
 

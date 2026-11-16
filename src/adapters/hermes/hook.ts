@@ -13,7 +13,7 @@
  */
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import { snapshotTree } from "../../core/auto.js";
+import { snapshotTree, wantsBase } from "../../core/auto.js";
 import { writeChronicleEvent, type ChronicleInput } from "../../core/chronicle-event.js";
 import { dangerousCommandIn } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
@@ -168,7 +168,7 @@ async function preLlm(root: string | null, session: string, input: HookInput): P
   let project: ProjectConfig | null = null;
   try {
     project = await loadProjectConfig(root, "hermes.toml");
-    if (project !== null && (project.auto.review || project.auto.chronicle)) {
+    if (project !== null && await wantsBase(root, project.auto)) {
       const base = await snapshotTree(root);
       if (base !== null) await saveBase(session, turn, base);
     }

@@ -161,6 +161,9 @@ function renderActions(actions) {
 ${shown.join("\n")}${rest}
 `;
 }
+async function wantsBase(repo, auto) {
+  return auto.review || auto.chronicle || (await readRepos(repo)).length > 0;
+}
 async function snapshotTree(repo) {
   const extras = await readRepos(repo);
   if (extras.length === 0) return snapshotRepo(repo);
@@ -10392,7 +10395,7 @@ async function preLlm(root, session, input) {
   let project = null;
   try {
     project = await loadProjectConfig(root, "hermes.toml");
-    if (project !== null && (project.auto.review || project.auto.chronicle)) {
+    if (project !== null && await wantsBase(root, project.auto)) {
       const base = await snapshotTree(root);
       if (base !== null) await saveBase(session, turn, base);
     }

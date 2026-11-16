@@ -54,6 +54,11 @@ export function renderActions(actions: readonly ActionRecord[]): string {
   return `\n本回合的工具调用（不是执行结果，共 ${actions.length} 条）：\n${shown.join("\n")}${rest}\n`;
 }
 
+/** 回合开始时要不要取基线：审查、汇报打开，或有额外仓库（它们的检查和 diff 都靠基线）。 */
+export async function wantsBase(repo: string, auto: { review: boolean; chronicle: boolean }): Promise<boolean> {
+  return auto.review || auto.chronicle || (await readRepos(repo)).length > 0;
+}
+
 /**
  * 当前工作树（含未跟踪文件，遵守 .gitignore）的树对象 id，作为回合的基线。
  * 在临时索引里 `git add -A` 再 `git write-tree`，真实索引不动；临时目录用完即删。

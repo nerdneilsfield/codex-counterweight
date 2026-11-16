@@ -9,7 +9,7 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { snapshotTree } from "../../core/auto.js";
+import { snapshotTree, wantsBase } from "../../core/auto.js";
 import { writeChronicleEvent, type ChronicleInput } from "../../core/chronicle-event.js";
 import { dangerousCommandIn } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
@@ -109,7 +109,7 @@ async function userPrompt(root: string, input: HookInput): Promise<string | null
   const notes: string[] = [];
   try {
     project = await loadProjectConfig(root, "kimi.toml");
-    if (project !== null && (project.auto.review || project.auto.chronicle)) {
+    if (project !== null && await wantsBase(root, project.auto)) {
       const base = await snapshotTree(root);
       if (base !== null) await saveBase(session, turn, base);
     }

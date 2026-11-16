@@ -4,7 +4,7 @@
  */
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { snapshotTree } from "../../core/auto.js";
+import { snapshotTree, wantsBase } from "../../core/auto.js";
 import { writeChronicleEvent } from "../../core/chronicle-event.js";
 import { dangerousCommandIn } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
@@ -71,7 +71,7 @@ async function userPrompt(root: string, input: HookInput): Promise<Output> {
   // 回合基线：只有审查或汇报打开时才用得上。取不到就不存，收尾时退回 HEAD。
   try {
     const project = await loadProjectConfig(root, "codex.toml");
-    if (project !== null && (project.auto.review || project.auto.chronicle)) {
+    if (project !== null && await wantsBase(root, project.auto)) {
       const base = await snapshotTree(root);
       if (base !== null) await saveBase(session, turn, base);
     }

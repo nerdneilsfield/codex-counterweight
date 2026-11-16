@@ -2,7 +2,7 @@
  * OpenCode v2 插件：进程内运行，没有一次性 hook 进程，回合状态放在内存里。
  * OpenCode 没有给插件向用户显示文字的通道，所以检查通过时什么也不显示，只写 `.cw/meter.jsonl`。
  */
-import { snapshotTree, type ActionRecord } from "../../core/auto.js";
+import { snapshotTree, wantsBase, type ActionRecord } from "../../core/auto.js";
 import { writeChronicleEvent, type ChronicleInput } from "../../core/chronicle-event.js";
 import { dangerousCommandIn } from "../../core/danger.js";
 import { loadProjectConfig, type ProjectConfig } from "../../core/config.js";
@@ -123,7 +123,7 @@ async function setupPlugin(ctx: Ctx): Promise<() => void> {
     // 回合基线：只有审查或汇报打开时才用得上。取不到就留 null，收尾时退回 HEAD。
     try {
       const project = await load();
-      if (project !== null && (project.auto.review || project.auto.chronicle)) turn.base = await snapshotTree(root);
+      if (project !== null && await wantsBase(root, project.auto)) turn.base = await snapshotTree(root);
     } catch {
       // Without a baseline the review falls back to HEAD.
     }
