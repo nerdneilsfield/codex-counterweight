@@ -1,5 +1,5 @@
 /**
- * 受保护路径：项目配置里写死的路径列表，外加 harness 自己的控制面文件 `.cw/project.toml`、`.cw/codex.toml`、`.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 和 `.cw/hermes.toml`，以及用户写的 `.cw/goal.md` 和 `.cw/scope.txt`。
+ * 受保护路径：项目配置里写死的路径列表，外加 harness 自己的控制面文件 `.cw/project.toml`、`.cw/codex.toml`、`.cw/claude.toml`、`.cw/opencode.toml`、`.cw/kimi.toml` 和 `.cw/hermes.toml`，以及用户写的 `.cw/goal.md`、`.cw/scope.txt` 和 `.cw/repos.txt`。
  * `edit` / `write` 对受保护目标直接拦截。没有内容快照、没有结算时的变化报告。
  *
  * Protected paths: the literal list from the project config plus the harness's
@@ -8,6 +8,7 @@
  * change report.
  */
 import path from "node:path";
+import { REPOS_FILE } from "./repos.js";
 import { SCOPE_FILE } from "./scope.js";
 
 /**
@@ -34,6 +35,6 @@ export const GOAL_FILE = ".cw/goal.md";
  */
 export function isProtected(relative: string, patterns: readonly string[]): boolean {
   const normalized = relative.split(path.sep).join("/");
-  if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE || normalized === SCOPE_FILE) return true;
+  if (CONFIG_FILES.includes(normalized) || normalized === GOAL_FILE || normalized === SCOPE_FILE || normalized === REPOS_FILE) return true;
   return patterns.some((pattern) => normalized === pattern || normalized.startsWith(`${pattern}/`));
 }
